@@ -30,7 +30,11 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import androidx.core.content.FileProvider
 
 class MainActivity : ComponentActivity() {
     private var autoStart by mutableStateOf(false)
@@ -121,8 +125,42 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         }
     }
 
+    LaunchedEffect(Unit) { LocalAi.refresh(context) }
+
     val pagerState = rememberPagerState(initialPage = 1) { 3 }
     val scope = rememberCoroutineScope()
+
+    val photoFile = remember { File(context.cacheDir, "page.jpg") }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) {
+            message = "Reading your page. This can take a minute."
+            scope.launch {
+                try {
+                    val prepared = withContext(Dispatchers.IO) {
+                        prepareImage(photoFile, File(context.cacheDir, "page_small.jpg"))
+                    }
+                    val text = LocalAi.transcribe(context, prepared.absolutePath)
+                    if (text.isNotBlank()) {
+                        ideas = store.add(text)
+                        message = "Page saved to your Desk."
+                    } else {
+                        message = "I couldn't read that page."
+                    }
+                } catch (e: Throwable) {
+                    message = "Couldn't read the page: " + (e.message ?: "unknown error")
+                }
+            }
+        }
+    }
+
+    fun photo() {
+        if (LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading) {
+            message = "Set up the on-device model in Think first."
+            return
+        }
+        val uri = FileProvider.getUriForFile(context, context.packageName + ".files", photoFile)
+        camera.launch(uri)
+    }
 
     LaunchedEffect(autoStart) {
         if (autoStart) {
@@ -151,7 +189,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
             onSelect = { scope.launch { pagerState.animateScrollToPage(it) } }
         )
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+        HorizontalPager(state = pagerState, beyondViewportPageCount = 2, modifier = Modifier.weight(1f)) { page ->
             when (page) {
                 0 -> DeskScreen(
                     ideas = ideas,
@@ -167,7 +205,8 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                     recording = recording,
                     live = (buffer + " " + partial).trim(),
                     message = message,
-                    onToggle = { toggle() }
+                    onToggle = { toggle() },
+                    onPhoto = { photo() }
                 )
                 else -> ThinkScreen(ideas, bible)
             }

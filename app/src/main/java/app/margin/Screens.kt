@@ -153,7 +153,7 @@ private fun MicIcon(color: Color) {
 }
 
 @Composable
-fun PageScreen(recording: Boolean, live: String, message: String?, onToggle: () -> Unit) {
+fun PageScreen(recording: Boolean, live: String, message: String?, onToggle: () -> Unit, onPhoto: () -> Unit) {
     val c = LocalMarginColors.current
     val date = remember { SimpleDateFormat("EEEE, d MMMM", Locale.getDefault()).format(Date()) }
     Column(
@@ -217,13 +217,23 @@ fun PageScreen(recording: Boolean, live: String, message: String?, onToggle: () 
             fontSize = 14.sp,
             color = c.graphite
         )
+        Spacer(Modifier.height(14.dp))
+        Box(
+            Modifier
+                .height(48.dp)
+                .border(1.5.dp, c.line, RoundedCornerShape(999.dp))
+                .clickable { onPhoto() }
+                .padding(horizontal = 20.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("Photograph a pencil page", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = c.ink)
+        }
         Spacer(Modifier.height(10.dp))
         Text(
             message ?: "",
             fontSize = 14.sp,
             textAlign = TextAlign.Center,
-            color = c.accent,
-            modifier = Modifier.height(20.dp)
+            color = c.accent
         )
     }
 }

@@ -32,7 +32,10 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.window.Dialog
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -48,6 +51,10 @@ fun DeskScreen(
     val c = LocalMarginColors.current
     var tab by remember { mutableIntStateOf(0) }
     var selected by remember { mutableStateOf<Idea?>(null) }
+    var suggestion by remember { mutableStateOf<String?>(null) }
+    var asking by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val fmt = remember { SimpleDateFormat("EEE d MMM, h:mm a", Locale.getDefault()) }
     val tilts = listOf(-1.4f, 1.0f, -0.7f, 1.6f)
 
@@ -125,7 +132,10 @@ fun DeskScreen(
                         .shadow(3.dp, RoundedCornerShape(14.dp))
                         .background(c.card, RoundedCornerShape(14.dp))
                         .border(1.dp, c.line, RoundedCornerShape(14.dp))
-                        .clickable { selected = idea }
+                        .clickable {
+                            selected = idea
+                            suggestion = null
+                        }
                         .padding(16.dp)
                 ) {
                     Text(
@@ -212,6 +222,33 @@ fun DeskScreen(
                     lineHeight = 26.sp,
                     color = c.ink
                 )
+                if (LocalAi.state == AiState.Installed || LocalAi.state == AiState.Ready || LocalAi.state == AiState.Loading) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .background(c.paper, RoundedCornerShape(12.dp))
+                            .clickable(enabled = !asking) {
+                                asking = true
+                                scope.launch {
+                                    suggestion = try {
+                                        LocalAi.suggestCategory(context, current.text)
+                                    } catch (e: Throwable) {
+                                        null
+                                    }
+                                    asking = false
+                                }
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (asking) "Thinking..." else if (suggestion != null) "Suggested: " + suggestion else "Ask the AI where this belongs",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = c.accent
+                        )
+                    }
+                }
                 Text(
                     "FILE INTO THE STORY BIBLE",
                     fontSize = 12.sp,
@@ -225,7 +262,7 @@ fun DeskScreen(
                         Modifier
                             .fillMaxWidth()
                             .height(48.dp)
-                            .border(1.dp, c.line, RoundedCornerShape(12.dp))
+                            .border(if (cat == suggestion) 2.dp else 1.dp, if (cat == suggestion) c.accent else c.line, RoundedCornerShape(12.dp))
                             .clickable {
                                 onFile(current, cat)
                                 selected = null
