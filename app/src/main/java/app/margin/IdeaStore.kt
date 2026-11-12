@@ -32,6 +32,12 @@ class IdeaStore(context: Context) {
         return updated
     }
 
+    fun remove(id: Long): List<Idea> {
+        val updated = load().filter { it.id != id }
+        save(updated)
+        return updated
+    }
+
     private fun save(list: List<Idea>) {
         val arr = JSONArray()
         for (idea in list) {

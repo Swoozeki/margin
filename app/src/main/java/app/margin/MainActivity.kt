@@ -63,8 +63,10 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     val haptic = LocalHapticFeedback.current
     val c = LocalMarginColors.current
     val store = remember { IdeaStore(context.applicationContext) }
+    val bibleStore = remember { BibleStore(context.applicationContext) }
 
     var ideas by remember { mutableStateOf(store.load()) }
+    var bible by remember { mutableStateOf(bibleStore.load()) }
     var recording by remember { mutableStateOf(false) }
     var buffer by remember { mutableStateOf("") }
     var partial by remember { mutableStateOf("") }
@@ -151,14 +153,23 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         )
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
             when (page) {
-                0 -> DeskScreen(ideas)
+                0 -> DeskScreen(
+                    ideas = ideas,
+                    bible = bible,
+                    onFile = { idea, category ->
+                        bible = bibleStore.add(category, idea.text)
+                        ideas = store.remove(idea.id)
+                    },
+                    onDelete = { idea -> ideas = store.remove(idea.id) },
+                    onRemoveEntry = { entry -> bible = bibleStore.remove(entry.id) }
+                )
                 1 -> PageScreen(
                     recording = recording,
                     live = (buffer + " " + partial).trim(),
                     message = message,
                     onToggle = { toggle() }
                 )
-                else -> ThinkScreen()
+                else -> ThinkScreen(ideas, bible)
             }
         }
     }
