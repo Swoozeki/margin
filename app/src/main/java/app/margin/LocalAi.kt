@@ -16,8 +16,6 @@ import com.google.ai.edge.litertlm.EngineConfig
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -176,49 +174,63 @@ object LocalAi {
         }
     }
 
-    class Chat internal constructor(private val conversation: Conversation) {
-        fun send(text: String): Flow<String> = conversation.sendMessageAsync(text).map { it.toString() }
+    private val taskLock = Mutex()
 
-        fun close() {
-            try {
-                conversation.close()
-            } catch (t: Throwable) {
+    /** One streamed reply. Stateless: the caller puts any history into [system]. */
+    suspend fun reply(ctx: Context, system: String, user: String, onPiece: (String) -> Unit) =
+        withContext(Dispatchers.Default) {
+            val e = ensureEngine(ctx)
+            taskLock.withLock {
+                e.createConversation(ConversationConfig(systemInstruction = Contents.of(system))).use { c ->
+                    c.sendMessageAsync(user).collect { onPiece(it.toString()) }
+                }
+            }
+        }
+
+    suspend fun transcribe(ctx: Context, imagePath: String): String = withContext(Dispatchers.Default) {
+        val e = ensureEngine(ctx)
+        taskLock.withLock {
+            val config = ConversationConfig(
+                systemInstruction = Contents.of(
+                    "You transcribe handwritten notes faithfully. Output only the transcribed text, with no commentary. Keep the original line breaks. If a word is unclear, give your best guess."
+                )
+            )
+            e.createConversation(config).use { c ->
+                c.sendMessage(
+                    Contents.of(
+                        Content.ImageFile(imagePath),
+                        Content.Text("Transcribe this handwritten page exactly as written.")
+                    )
+                ).toString().trim()
             }
         }
     }
 
-    suspend fun startChat(ctx: Context, system: String): Chat = withContext(Dispatchers.Default) {
-        val e = ensureEngine(ctx)
-        Chat(e.createConversation(ConversationConfig(systemInstruction = Contents.of(system))))
-    }
-
-    suspend fun transcribe(ctx: Context, imagePath: String): String = withContext(Dispatchers.Default) {
-        val e = ensureEngine(ctx)
-        val config = ConversationConfig(
-            systemInstruction = Contents.of(
-                "You transcribe handwritten notes faithfully. Output only the transcribed text, with no commentary. Keep the original line breaks. If a word is unclear, give your best guess."
-            )
-        )
-        e.createConversation(config).use { c ->
-            c.sendMessage(
-                Contents.of(
-                    Content.ImageFile(imagePath),
-                    Content.Text("Transcribe this handwritten page exactly as written.")
-                )
-            ).toString().trim()
+    /** Pulls new story facts out of a spoken or written note. Returns (category, text) pairs. */
+    suspend fun extractBible(ctx: Context, note: String, existing: List<Entry>): List<Pair<String, String>> =
+        withContext(Dispatchers.Default) {
+            val e = ensureEngine(ctx)
+            val known = existing.takeLast(40).joinToString("\n") { "- " + it.text }
+            val system = "You maintain the story bible for a fiction writer. From their note, extract only concrete story facts worth keeping: " +
+                "Characters (people and their traits), Places (settings), Threads (plot events and story lines), Questions (open problems the writer must answer). " +
+                "Write each as a short, clear note in the writer's own terms. Output one per line exactly as: Category | note. " +
+                "At most 6 lines. No other text. If there is nothing worth keeping, output NONE.\n" +
+                (if (known.isNotEmpty()) "Already in the bible, do not repeat:\n" + known else "")
+            val raw = taskLock.withLock {
+                e.createConversation(ConversationConfig(systemInstruction = Contents.of(system))).use { c ->
+                    c.sendMessage(note).toString()
+                }
+            }
+            val seen = existing.map { it.text.lowercase() }.toMutableSet()
+            val out = mutableListOf<Pair<String, String>>()
+            for (line in raw.lines()) {
+                val parts = line.split("|", limit = 2)
+                if (parts.size < 2) continue
+                val cat = BIBLE_CATEGORIES.firstOrNull { parts[0].contains(it, ignoreCase = true) } ?: continue
+                val text = parts[1].trim().trimStart('-', '*', ' ').trim()
+                if (text.length < 3 || !seen.add(text.lowercase())) continue
+                out.add(cat to text)
+            }
+            out
         }
-    }
-
-    suspend fun suggestCategory(ctx: Context, text: String): String? = withContext(Dispatchers.Default) {
-        val e = ensureEngine(ctx)
-        val config = ConversationConfig(
-            systemInstruction = Contents.of(
-                "You sort story notes for a fiction writer. Reply with exactly one word: Characters, Places, Threads, or Questions. Characters = a person or their traits. Places = settings or locations. Threads = plot events or story lines. Questions = open questions the writer must answer."
-            )
-        )
-        e.createConversation(config).use { c ->
-            val reply = c.sendMessage(text).toString()
-            BIBLE_CATEGORIES.firstOrNull { reply.contains(it, ignoreCase = true) }
-        }
-    }
 }

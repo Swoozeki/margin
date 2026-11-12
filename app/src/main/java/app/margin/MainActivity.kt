@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBars
@@ -68,13 +69,35 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     val c = LocalMarginColors.current
     val store = remember { IdeaStore(context.applicationContext) }
     val bibleStore = remember { BibleStore(context.applicationContext) }
+    val scope = rememberCoroutineScope()
 
     var ideas by remember { mutableStateOf(store.load()) }
     var bible by remember { mutableStateOf(bibleStore.load()) }
     var recording by remember { mutableStateOf(false) }
+    var latchedStop by remember { mutableStateOf(false) }
     var buffer by remember { mutableStateOf("") }
     var partial by remember { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
+    var extracting by remember { mutableStateOf(false) }
+    var proposals by remember { mutableStateOf<List<Proposal>?>(null) }
+
+    fun runExtract(text: String) {
+        if (LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading) {
+            message = "Set up the model in Workshop to fill your Bible automatically."
+            return
+        }
+        scope.launch {
+            extracting = true
+            try {
+                val found = LocalAi.extractBible(context, text, bibleStore.load())
+                if (found.isEmpty()) message = "Nothing new for the Bible."
+                else proposals = found.map { Proposal(it.first, it.second) }
+            } catch (e: Throwable) {
+                message = "Couldn't update the Bible: " + (e.message ?: "unknown error")
+            }
+            extracting = false
+        }
+    }
 
     val voice = remember {
         VoiceCapture(
@@ -87,12 +110,12 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             onDone = {
                 recording = false
                 val text = (buffer + " " + partial).trim()
-                if (text.isNotEmpty()) {
-                    ideas = store.add(text)
-                    message = "Saved to your Desk."
-                }
                 buffer = ""
                 partial = ""
+                if (text.isNotEmpty()) {
+                    ideas = store.add(text)
+                    runExtract(text)
+                }
             },
             onError = { message = it }
         )
@@ -100,40 +123,36 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     DisposableEffect(Unit) { onDispose { voice.release() } }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) {
-            message = null
-            recording = true
-            voice.start()
-        } else {
-            message = "Microphone permission is needed to capture ideas by voice."
-        }
+        if (!granted) message = "Microphone permission is needed to record."
     }
 
-    fun toggle() {
-        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        if (recording) {
-            recording = false
-            voice.stop()
-        } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+    fun startRec() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            message = null
-            recording = true
-            voice.start()
-        } else {
             permission.launch(Manifest.permission.RECORD_AUDIO)
+            return
         }
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        message = null
+        recording = true
+        voice.start()
+    }
+
+    fun stopRec() {
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        recording = false
+        voice.stop()
     }
 
     LaunchedEffect(Unit) { LocalAi.refresh(context) }
 
     val pagerState = rememberPagerState(initialPage = 1) { 3 }
-    val scope = rememberCoroutineScope()
 
     val photoFile = remember { File(context.cacheDir, "page.jpg") }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         if (ok) {
-            message = "Reading your page. This can take a minute."
+            message = "Reading your page"
             scope.launch {
                 try {
                     val prepared = withContext(Dispatchers.IO) {
@@ -142,9 +161,10 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                     val text = LocalAi.transcribe(context, prepared.absolutePath)
                     if (text.isNotBlank()) {
                         ideas = store.add(text)
-                        message = "Page saved to your Desk."
+                        message = null
+                        runExtract(text)
                     } else {
-                        message = "I couldn't read that page."
+                        message = "Couldn't read that page."
                     }
                 } catch (e: Throwable) {
                     message = "Couldn't read the page: " + (e.message ?: "unknown error")
@@ -155,7 +175,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
 
     fun photo() {
         if (LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading) {
-            message = "Set up the on-device model in Think first."
+            message = "Set up the model in Workshop first."
             return
         }
         val uri = FileProvider.getUriForFile(context, context.packageName + ".files", photoFile)
@@ -166,50 +186,59 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         if (autoStart) {
             onAutoStartHandled()
             pagerState.scrollToPage(1)
-            if (!recording) toggle()
+            if (!recording) startRec()
         }
     }
 
     var firstSettle by remember { mutableStateOf(true) }
     LaunchedEffect(pagerState.settledPage) {
-        if (firstSettle) {
-            firstSettle = false
-        } else {
-            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-        }
+        if (firstSettle) firstSettle = false
+        else haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(c.paper)
-            .windowInsetsPadding(WindowInsets.systemBars)
-    ) {
-        RoomTabs(
-            position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
-            onSelect = { scope.launch { pagerState.animateScrollToPage(it) } }
-        )
-        HorizontalPager(state = pagerState, beyondViewportPageCount = 2, modifier = Modifier.weight(1f)) { page ->
-            when (page) {
-                0 -> DeskScreen(
-                    ideas = ideas,
-                    bible = bible,
-                    onFile = { idea, category ->
-                        bible = bibleStore.add(category, idea.text)
-                        ideas = store.remove(idea.id)
-                    },
-                    onDelete = { idea -> ideas = store.remove(idea.id) },
-                    onRemoveEntry = { entry -> bible = bibleStore.remove(entry.id) }
-                )
-                1 -> PageScreen(
-                    recording = recording,
-                    live = (buffer + " " + partial).trim(),
-                    message = message,
-                    onToggle = { toggle() },
-                    onPhoto = { photo() }
-                )
-                else -> ThinkScreen(ideas, bible)
+    Box(Modifier.fillMaxSize().background(c.paper)) {
+        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+            NavBar(
+                position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
+                onSelect = { scope.launch { pagerState.animateScrollToPage(it) } }
+            )
+            HorizontalPager(state = pagerState, beyondViewportPageCount = 2, modifier = Modifier.weight(1f)) { page ->
+                when (page) {
+                    0 -> BibleScreen(bible) { entry -> bible = bibleStore.remove(entry.id) }
+                    1 -> RecordScreen(
+                        recording = recording,
+                        live = (buffer + " " + partial).trim(),
+                        status = if (extracting) "Updating your Bible" else message,
+                        history = ideas,
+                        onPress = {
+                            if (recording) {
+                                latchedStop = true
+                                stopRec()
+                            } else startRec()
+                        },
+                        onRelease = {
+                            if (latchedStop) latchedStop = false
+                            else if (recording) stopRec()
+                        },
+                        onPhoto = { photo() },
+                        onDelete = { idea -> ideas = store.remove(idea.id) },
+                        onExtract = { idea -> runExtract(idea.text) }
+                    )
+                    else -> WorkshopScreen(ideas, bible)
+                }
             }
+        }
+        val pending = proposals
+        if (pending != null) {
+            ProposalDialog(
+                proposals = pending,
+                onToggle = { i -> proposals = pending.mapIndexed { j, p -> if (j == i) p.copy(on = !p.on) else p } },
+                onConfirm = {
+                    bible = bibleStore.addAll(pending.filter { it.on }.map { it.category to it.text })
+                    proposals = null
+                },
+                onDismiss = { proposals = null }
+            )
         }
     }
 }

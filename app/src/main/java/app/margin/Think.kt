@@ -8,6 +8,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -35,11 +37,15 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -47,60 +53,57 @@ import kotlinx.coroutines.launch
 
 private val MODE_WORDS = listOf("Listen", "Question", "Critique", "Teach")
 
-private val MODE_BLURBS = listOf(
-    "Stay quiet and write down your thinking. No interruptions.",
-    "One good question at a time, about your story.",
-    "Honest notes on what is working and what is not.",
-    "Craft and research answers, short and spoken."
-)
-
 private val MODE_INSTRUCTIONS = listOf(
-    "Listen mode: stay quiet while I think out loud. Reply with only a few words of acknowledgement. When I say 'done', summarize my thinking and list any decisions and open questions.",
-    "Question mode: ask me one good question at a time about my story. Do not give me answers or ideas unless I ask.",
+    "Listen mode: I am thinking out loud. Reply with only a few words of acknowledgement. If I say 'done', summarize my thinking and list decisions and open questions.",
+    "Question mode: ask me one good question at a time about my story. Do not give answers or ideas unless I ask.",
     "Critique mode: give me honest, specific notes on what is working and what is not. Do not flatter me.",
-    "Teach mode: answer my craft and research questions briefly, in a spoken style, and ask if I want to go deeper."
+    "Teach mode: answer my craft and research question briefly, in a spoken style."
 )
 
 data class Msg(val mine: Boolean, val text: String)
 
-fun buildSystemPrompt(modeIndex: Int, ideas: List<Idea>, bible: List<Entry>): String {
+fun buildSystemPrompt(mode: Int, ideas: List<Idea>, bible: List<Entry>, history: List<Msg>): String {
     val sb = StringBuilder()
     sb.append("You are a warm, sharp fiction-writing companion for an aspiring writer who prefers talking to typing. Keep every reply to one to three short sentences that are easy to say aloud. Never write their story for them.\n\n")
-    sb.append(MODE_INSTRUCTIONS[modeIndex]).append("\n\n")
-    var anyBible = false
+    sb.append(MODE_INSTRUCTIONS[mode]).append("\n\n")
+    var any = false
     for (cat in BIBLE_CATEGORIES) {
         val items = bible.filter { it.category == cat }
-        if (items.isNotEmpty()) {
-            if (!anyBible) {
-                sb.append("Their story bible so far:\n")
-                anyBible = true
-            }
-            sb.append(cat).append(":\n")
-            for (e in items) sb.append("- ").append(e.text).append("\n")
+        if (items.isEmpty()) continue
+        if (!any) {
+            sb.append("Their story bible:\n")
+            any = true
         }
+        sb.append(cat).append(":\n")
+        for (e in items.takeLast(15)) sb.append("- ").append(e.text).append("\n")
     }
-    if (anyBible) sb.append("\n")
-    val recent = ideas.take(8)
+    if (any) sb.append("\n")
+    val recent = ideas.take(4)
     if (recent.isNotEmpty()) {
-        sb.append("Recent loose ideas from their desk:\n")
-        for (i in recent) sb.append("- ").append(i.text).append("\n")
+        sb.append("Their latest recordings:\n")
+        for (i in recent) sb.append("- ").append(i.text.take(300)).append("\n")
+        sb.append("\n")
+    }
+    if (history.isNotEmpty()) {
+        sb.append("Conversation so far:\n")
+        for (m in history) sb.append(if (m.mine) "Writer: " else "You: ").append(m.text.take(400)).append("\n")
     }
     return sb.toString()
 }
 
 @Composable
-fun ThinkScreen(ideas: List<Idea>, bible: List<Entry>) {
+fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
     val c = LocalMarginColors.current
     val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val ideasNow by rememberUpdatedState(ideas)
     val bibleNow by rememberUpdatedState(bible)
 
-    var mode by remember { mutableIntStateOf(0) }
     var messages by remember { mutableStateOf(listOf<Msg>()) }
-    var chat by remember { mutableStateOf<LocalAi.Chat?>(null) }
+    var talkMode by remember { mutableIntStateOf(-1) }
+    var lastMode by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    var listening by remember { mutableStateOf(false) }
     var buf by remember { mutableStateOf("") }
     var part by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
@@ -111,32 +114,26 @@ fun ThinkScreen(ideas: List<Idea>, bible: List<Entry>) {
         engine = TextToSpeech(context) { status ->
             if (status == TextToSpeech.SUCCESS) tts.value = engine
         }
-        onDispose {
-            engine?.shutdown()
-            chat?.close()
-        }
+        onDispose { engine?.shutdown() }
     }
 
-    fun speak(text: String) {
-        val clean = text.replace("*", "").replace("#", "").trim()
-        if (clean.isNotEmpty()) tts.value?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "reply")
-    }
-
-    fun send(text: String) {
-        if (text.isBlank() || busy) return
+    fun send(text: String, mode: Int) {
+        if (text.isBlank()) return
         scope.launch {
             busy = true
             note = ""
             try {
-                val conv = chat ?: LocalAi.startChat(context, buildSystemPrompt(mode, ideasNow, bibleNow))
-                chat = conv
+                val system = buildSystemPrompt(mode, ideasNow, bibleNow, messages.takeLast(6))
                 messages = messages + Msg(true, text) + Msg(false, "...")
                 val sb = StringBuilder()
-                conv.send(text).collect { piece ->
+                LocalAi.reply(context, system, text) { piece ->
                     sb.append(piece)
                     messages = messages.dropLast(1) + Msg(false, sb.toString())
                 }
-                speak(sb.toString())
+                if (mode != 0) {
+                    val clean = sb.toString().replace("*", "").replace("#", "").trim()
+                    if (clean.isNotEmpty()) tts.value?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "reply")
+                }
             } catch (e: Throwable) {
                 note = "The model hit a problem: " + (e.message ?: "unknown error")
             }
@@ -153,136 +150,72 @@ fun ThinkScreen(ideas: List<Idea>, bible: List<Entry>) {
                 part = ""
             },
             onDone = {
-                listening = false
+                val mode = talkMode
+                talkMode = -1
                 val t = (buf + " " + part).trim()
                 buf = ""
                 part = ""
-                send(t)
+                if (mode >= 0) send(t, mode)
             },
             onError = { note = it }
         )
     }
     DisposableEffect(Unit) { onDispose { voice.release() } }
 
+    var pendingMode by remember { mutableIntStateOf(-1) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) {
-            listening = true
-            voice.start()
-        } else {
-            note = "Microphone permission is needed to talk."
-        }
-    }
-    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) LocalAi.startImport(context, uri)
+        if (!granted) note = "Microphone permission is needed to talk."
+        pendingMode = -1
     }
 
-    fun toggleTalk() {
-        if (listening) {
-            listening = false
-            voice.stop()
-            return
-        }
+    fun begin(mode: Int) {
         if (busy) return
-        tts.value?.stop()
-        note = ""
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
-            listening = true
-            voice.start()
-        } else {
             permission.launch(Manifest.permission.RECORD_AUDIO)
+            return
         }
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        tts.value?.stop()
+        note = ""
+        buf = ""
+        part = ""
+        talkMode = mode
+        lastMode = mode
+        voice.start()
     }
 
-    fun pickMode(i: Int) {
-        if (i == mode) return
-        mode = i
-        chat?.close()
-        chat = null
-        messages = emptyList()
-        note = ""
+    fun end() {
+        if (talkMode >= 0) voice.stop()
+    }
+
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) LocalAi.startImport(context, uri)
     }
 
     val state = LocalAi.state
     val ready = state == AiState.Installed || state == AiState.Loading ||
         state == AiState.Ready || state == AiState.Failed
 
-    val tints = listOf(
-        Color(0x1A786E5F),
-        Color(0x1AB8432A),
-        Color(0x203C648C),
-        Color(0x20467350)
-    )
-    val tint by animateColorAsState(tints[mode], tween(600), label = "tint")
+    val tints = listOf(Color(0x1A786E5F), Color(0x1AB8432A), Color(0x203C648C), Color(0x20467350))
+    val tint by animateColorAsState(tints[lastMode], tween(600), label = "tint")
     val listState = rememberLazyListState()
-    LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+    val live = (buf + " " + part).trim()
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text, live) {
+        val n = messages.size + (if (live.isNotEmpty()) 1 else 0)
+        if (n > 0) listState.scrollToItem(n - 1)
     }
 
     Box(Modifier.fillMaxSize().background(tint)) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text(
-                "THINK WITH ME",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                letterSpacing = 1.sp,
-                color = c.graphite
-            )
-            Text(
-                MODE_WORDS[mode],
-                fontFamily = FontFamily.Serif,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 38.sp,
-                color = c.ink
-            )
-            Text(
-                MODE_BLURBS[mode],
-                fontFamily = FontFamily.Serif,
-                fontStyle = FontStyle.Italic,
-                fontSize = 16.sp,
-                lineHeight = 22.sp,
-                color = c.graphite
-            )
-            Row(Modifier.fillMaxWidth()) {
-                MODE_WORDS.forEachIndexed { i, w ->
-                    Box(
-                        Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .clickable { pickMode(i) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            w,
-                            fontSize = 15.sp,
-                            fontWeight = if (mode == i) FontWeight.SemiBold else FontWeight.Medium,
-                            color = if (mode == i) c.ink else c.graphite
-                        )
-                    }
-                }
-            }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(2.dp)
-                    .background(c.line)
-            )
-
+        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
             if (!ready) {
                 Column(
-                    Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                    Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Text(
-                        "Your writing companion runs entirely on this phone. It needs a one-time download of the Gemma 4 model (about 2.6 GB). Use Wi-Fi and keep the app open until it finishes.",
+                        "One-time download of the on-device model, about 2.6 GB. Use Wi-Fi.",
                         fontSize = 15.sp,
                         lineHeight = 22.sp,
                         color = c.graphite
@@ -294,7 +227,6 @@ fun ThinkScreen(ideas: List<Idea>, bible: List<Entry>) {
                             color = c.accent,
                             trackColor = c.line
                         )
-                        Text("Downloading...", fontSize = 14.sp, color = c.graphite)
                     } else {
                         Box(
                             Modifier
@@ -303,18 +235,14 @@ fun ThinkScreen(ideas: List<Idea>, bible: List<Entry>) {
                                 .background(c.accent, RoundedCornerShape(16.dp))
                                 .clickable { LocalAi.startDownload(context) },
                             contentAlignment = Alignment.Center
-                        ) {
-                            Text("Download the model", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.onAccent)
-                        }
+                        ) { Text("Download model", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.onAccent) }
                         Box(
                             Modifier
                                 .fillMaxWidth()
                                 .height(48.dp)
                                 .clickable { importer.launch(arrayOf("*/*")) },
                             contentAlignment = Alignment.Center
-                        ) {
-                            Text("Or import a model file", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.ink)
-                        }
+                        ) { Text("Import a model file", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.ink) }
                     }
                     if (LocalAi.message.isNotEmpty()) {
                         Text(LocalAi.message, fontSize = 14.sp, lineHeight = 20.sp, color = c.accent)
@@ -323,32 +251,20 @@ fun ThinkScreen(ideas: List<Idea>, bible: List<Entry>) {
             } else {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    if (messages.isEmpty()) {
-                        item {
-                            Text(
-                                if (state == AiState.Failed) LocalAi.message else "Tap the button below and just start talking.",
-                                fontSize = 15.sp,
-                                lineHeight = 22.sp,
-                                color = c.graphite
-                            )
-                        }
-                    }
                     items(messages.size) { i ->
                         val m = messages[i]
-                        Box(Modifier.fillMaxWidth(), contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart) {
+                        Box(
+                            Modifier.fillMaxWidth(),
+                            contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart
+                        ) {
                             Text(
                                 m.text,
                                 modifier = Modifier
-                                    .fillMaxWidth(0.85f)
-                                    .background(
-                                        if (m.mine) c.ink else c.card,
-                                        RoundedCornerShape(18.dp)
-                                    )
+                                    .fillMaxWidth(0.88f)
+                                    .background(if (m.mine) c.ink else c.card, RoundedCornerShape(18.dp))
                                     .padding(horizontal = 14.dp, vertical = 12.dp),
                                 fontFamily = if (m.mine) FontFamily.SansSerif else FontFamily.Serif,
                                 fontSize = 16.sp,
@@ -357,29 +273,65 @@ fun ThinkScreen(ideas: List<Idea>, bible: List<Entry>) {
                             )
                         }
                     }
+                    if (live.isNotEmpty()) {
+                        item {
+                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                                Text(
+                                    live,
+                                    modifier = Modifier
+                                        .fillMaxWidth(0.88f)
+                                        .border(1.5.dp, c.line, RoundedCornerShape(18.dp))
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    fontStyle = FontStyle.Italic,
+                                    fontSize = 16.sp,
+                                    lineHeight = 22.sp,
+                                    color = c.graphite
+                                )
+                            }
+                        }
+                    }
+                    if (state == AiState.Failed && messages.isEmpty()) {
+                        item { Text(LocalAi.message, fontSize = 14.sp, color = c.accent) }
+                    }
                 }
             }
 
-            if (note.isNotEmpty()) {
-                Text(note, fontSize = 13.sp, lineHeight = 18.sp, color = c.accent)
-            }
-            Box(
+            Text(
+                if (note.isNotEmpty()) note else if (busy) "Thinking" else "",
+                modifier = Modifier.fillMaxWidth().height(22.dp).padding(horizontal = 6.dp),
+                fontSize = 13.sp,
+                color = if (note.isNotEmpty()) c.accent else c.graphite
+            )
+
+            Row(
                 Modifier
                     .fillMaxWidth()
-                    .height(58.dp)
-                    .background(if (ready) c.accent else c.line, RoundedCornerShape(18.dp))
-                    .clickable(enabled = ready) { toggleTalk() },
-                contentAlignment = Alignment.Center
+                    .padding(bottom = 22.dp)
+                    .height(64.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(c.card)
+                    .border(1.dp, c.line, RoundedCornerShape(20.dp))
             ) {
-                Text(
-                    if (!ready) "Download the model first"
-                    else if (listening) "Listening. Tap to stop."
-                    else if (busy) "Thinking..."
-                    else "Tap to talk",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (ready) c.onAccent else c.graphite
-                )
+                MODE_WORDS.forEachIndexed { i, w ->
+                    val on = talkMode == i
+                    if (i > 0) Box(Modifier.width(1.dp).fillMaxSize().padding(vertical = 14.dp).background(c.line))
+                    Box(
+                        Modifier
+                            .weight(1f)
+                            .fillMaxSize()
+                            .background(if (on) c.accent else Color.Transparent)
+                            .holdToTalk({ if (ready) begin(i) }, { end() }),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            w,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            textAlign = TextAlign.Center,
+                            color = if (on) c.onAccent else if (ready) c.ink else c.graphite
+                        )
+                    }
+                }
             }
         }
     }

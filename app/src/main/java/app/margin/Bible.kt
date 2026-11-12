@@ -9,6 +9,8 @@ val BIBLE_CATEGORIES = listOf("Characters", "Places", "Threads", "Questions")
 
 data class Entry(val id: Long, val category: String, val text: String, val createdAt: Long)
 
+data class Proposal(val category: String, val text: String, val on: Boolean = true)
+
 class BibleStore(context: Context) {
     private val file = File(context.filesDir, "bible.json")
 
@@ -32,6 +34,14 @@ class BibleStore(context: Context) {
     fun add(category: String, text: String): List<Entry> {
         val now = System.currentTimeMillis()
         val updated = load() + Entry(now, category, text, now)
+        save(updated)
+        return updated
+    }
+
+    fun addAll(items: List<Pair<String, String>>): List<Entry> {
+        val base = System.currentTimeMillis()
+        var i = 0L
+        val updated = load() + items.map { Entry(base + (i++), it.first, it.second, base) }
         save(updated)
         return updated
     }
