@@ -27,7 +27,22 @@ jobs:
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
       - name: Build debug APK
-        run: gradle assembleDebug --stacktrace
+        run: |
+          set -o pipefail
+          gradle assembleDebug --stacktrace 2>&1 | tee build.log
+
+      - name: Save build log to a branch
+        if: always()
+        run: |
+          tail -n 400 build.log > /tmp/tail.log || true
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          git checkout --orphan build-log
+          git rm -rf . > /dev/null 2>&1 || true
+          cp /tmp/tail.log build.log
+          git add build.log
+          git commit -m "Build log for ${{ github.sha }}"
+          git push -f origin build-log
 
       - name: Publish APK as a release
         env:
