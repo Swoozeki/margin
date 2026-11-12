@@ -64,7 +64,7 @@ data class Msg(val mine: Boolean, val text: String)
 
 fun buildSystemPrompt(mode: Int, ideas: List<Idea>, bible: List<Entry>, history: List<Msg>): String {
     val sb = StringBuilder()
-    sb.append("You are a warm, sharp fiction-writing companion for an aspiring writer who prefers talking to typing. Keep every reply to one to three short sentences that are easy to say aloud. Never write their story for them.\n\n")
+    sb.append("You are a warm, sharp fiction-writing companion for an aspiring writer who prefers talking to typing. Talk like a real person in a relaxed conversation: contractions, natural rhythm, a brief reaction before your point. Keep every reply to one to three short sentences. No lists, no markdown, no emojis. Never write their story for them.\n\n")
     sb.append(MODE_INSTRUCTIONS[mode]).append("\n\n")
     var any = false
     for (cat in BIBLE_CATEGORIES) {
@@ -109,6 +109,15 @@ fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
     var note by remember { mutableStateOf("") }
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
 
+    LaunchedEffect(Unit) { SpeechOut.prepare(context) }
+
+    fun say(sentence: String) {
+        val clean = sentence.replace("*", "").replace("#", "").replace("_", " ").trim()
+        if (clean.length < 2) return
+        if (SpeechOut.ready) SpeechOut.speak(clean)
+        else tts.value?.speak(clean, TextToSpeech.QUEUE_ADD, null, "reply")
+    }
+
     DisposableEffect(Unit) {
         var engine: TextToSpeech? = null
         engine = TextToSpeech(context) { status ->
@@ -126,14 +135,20 @@ fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
                 val system = buildSystemPrompt(mode, ideasNow, bibleNow, messages.takeLast(6))
                 messages = messages + Msg(true, text) + Msg(false, "...")
                 val sb = StringBuilder()
+                var spoken = 0
                 LocalAi.reply(context, system, text) { piece ->
                     sb.append(piece)
                     messages = messages.dropLast(1) + Msg(false, sb.toString())
+                    if (mode != 0) {
+                        val m = Regex("[.!?\\n](\\s|$)").findAll(sb.substring(spoken)).lastOrNull()
+                        if (m != null) {
+                            val end = spoken + m.range.last + 1
+                            say(sb.substring(spoken, end))
+                            spoken = end
+                        }
+                    }
                 }
-                if (mode != 0) {
-                    val clean = sb.toString().replace("*", "").replace("#", "").trim()
-                    if (clean.isNotEmpty()) tts.value?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "reply")
-                }
+                if (mode != 0 && spoken < sb.length) say(sb.substring(spoken))
             } catch (e: Throwable) {
                 note = "The model hit a problem: " + (e.message ?: "unknown error")
             }
@@ -178,6 +193,7 @@ fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
         }
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         tts.value?.stop()
+        SpeechOut.stop()
         note = ""
         buf = ""
         part = ""
