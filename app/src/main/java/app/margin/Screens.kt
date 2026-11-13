@@ -64,10 +64,13 @@ const val Z_CANCEL = 4
 
 fun zoneOf(dx: Float, dy: Float, dead: Float): Int {
     if (dx * dx + dy * dy < dead * dead) return Z_CAPTURE
-    return if (abs(dx) > abs(dy)) {
-        if (dx < 0) Z_CRITIQUE else Z_TEACH
-    } else {
-        if (dy < 0) Z_QUESTION else Z_CANCEL
+    if (dy > 0f) return Z_CANCEL
+    val phi = Math.toDegrees(Math.atan2(abs(dx).toDouble(), (-dy).toDouble()))
+    return when {
+        phi < 24.0 -> Z_QUESTION
+        phi > 78.0 -> Z_CANCEL
+        dx < 0f -> Z_CRITIQUE
+        else -> Z_TEACH
     }
 }
 
@@ -217,9 +220,9 @@ fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
 
 
 private val DOCK_W = 340.dp
-private val DOCK_H = 312.dp
+private val DOCK_H = 250.dp
 private val MIC_CX = 170.dp
-private val MIC_CY = 214.dp
+private val MIC_CY = 194.dp
 private val CUE_W = 108.dp
 private val CUE_H = 36.dp
 
@@ -228,7 +231,7 @@ private val CAPTIONS = listOf(
     "Question" to "Ask me, or think aloud and I\u2019ll probe",
     "Critique" to "Honest notes on what you say",
     "Teach" to "Craft and research, explained",
-    "Cancel" to "Let go to discard"
+    "Cancel" to "Let go to discard it"
 )
 
 @Composable
@@ -290,11 +293,30 @@ private fun Cue(label: String, glyph: Int, active: Boolean, danger: Boolean, fan
 }
 
 @Composable
+private fun CancelCue(active: Boolean, fan: Float, modifier: Modifier) {
+    val c = LocalMarginColors.current
+    val err = errorTone(c)
+    val sc by animateFloatAsState(if (active) 1.2f else 1f, tween(120), label = "cc")
+    Box(
+        modifier
+            .size(42.dp)
+            .graphicsLayer {
+                alpha = fan
+                val k = sc * (0.7f + 0.3f * fan)
+                scaleX = k
+                scaleY = k
+            }
+            .background(if (active) err else c.card, CircleShape)
+            .border(1.5.dp, err, CircleShape),
+        contentAlignment = Alignment.Center
+    ) { Glyph(13, if (active) Color.White else err, 18.dp) }
+}
+
+@Composable
 fun MicDock(
     recording: Boolean,
     zone: Int,
     drag: () -> Offset,
-    hint: Boolean,
     onStart: () -> Unit,
     onZone: (Int) -> Unit,
     onDrag: (Offset) -> Unit,
@@ -316,20 +338,10 @@ fun MicDock(
 
     Box(modifier.size(DOCK_W, DOCK_H)) {
         if (fan > 0.01f) {
-            Cue("Question", 7, zone == Z_QUESTION, false, fan, Modifier.offset(MIC_CX - CUE_W / 2, MIC_CY - 122.dp - CUE_H / 2))
-            Cue("Critique", 11, zone == Z_CRITIQUE, false, fan, Modifier.offset(MIC_CX - 112.dp - CUE_W / 2, MIC_CY - CUE_H / 2))
-            Cue("Teach", 12, zone == Z_TEACH, false, fan, Modifier.offset(MIC_CX + 112.dp - CUE_W / 2, MIC_CY - CUE_H / 2))
-            Cue("Cancel", 13, zone == Z_CANCEL, true, fan, Modifier.offset(MIC_CX - CUE_W / 2, MIC_CY + 70.dp - CUE_H / 2))
-        }
-
-        if (!recording && hint) {
-            Text(
-                "Hold to record \u00b7 drag to talk it through",
-                modifier = Modifier.fillMaxWidth().offset(y = MIC_CY - 82.dp),
-                fontSize = 12.sp,
-                color = c.graphite,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-            )
+            Cue("Question", 7, zone == Z_QUESTION, false, fan, Modifier.offset(MIC_CX - CUE_W / 2, MIC_CY - 112.dp - CUE_H / 2))
+            Cue("Critique", 11, zone == Z_CRITIQUE, false, fan, Modifier.offset(MIC_CX - 100.dp - CUE_W / 2, MIC_CY - 62.dp - CUE_H / 2))
+            Cue("Teach", 12, zone == Z_TEACH, false, fan, Modifier.offset(MIC_CX + 100.dp - CUE_W / 2, MIC_CY - 62.dp - CUE_H / 2))
+            CancelCue(zone == Z_CANCEL, fan, Modifier.offset(MIC_CX - 128.dp - 21.dp, MIC_CY - 21.dp + 6.dp))
         }
 
         Box(

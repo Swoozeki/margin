@@ -216,7 +216,10 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     }
 
     fun finish(text: String, z: Int) {
-        if (z == Z_CANCEL) return
+        if (z == Z_CANCEL) {
+            if (text.isNotBlank()) say(Tone.Info, "Discarded", null, "Undo") { finish(text, Z_CAPTURE) }
+            return
+        }
         if (text.isBlank()) {
             say(Tone.Info, "Didn't catch that", "Hold the mic and try again.")
             return
@@ -344,7 +347,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     val sbTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val topPad = sbTop + 64.dp
-    val bottomPad = 176.dp + navBottom
+    val bottomPad = 132.dp + navBottom
 
     Box(Modifier.fillMaxSize().background(c.paper)) {
         HorizontalPager(
@@ -392,7 +395,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .height(190.dp + navBottom)
+                .height(150.dp + navBottom)
                 .background(Brush.verticalGradient(0f to Color.Transparent, 0.45f to c.paper.copy(alpha = 0.9f), 1f to c.paper))
         )
 
@@ -402,7 +405,6 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             recording = recording,
             zone = zone,
             drag = { drag },
-            hint = dragUses < 3,
             onStart = {
                 if (recording) {
                     latchedStop = true
