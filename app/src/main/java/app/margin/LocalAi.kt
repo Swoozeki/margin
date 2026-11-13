@@ -28,9 +28,20 @@ enum class AiState { Missing, Downloading, Installed, Loading, Ready, Failed }
 
 /** The on-device model (Gemma 4 E2B via LiteRT-LM). Everything here runs on the phone. */
 object LocalAi {
-    private const val MODEL_NAME = "gemma-4-E2B-it.litertlm"
-    private const val MODEL_URL =
-        "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm"
+    private const val E2B = "gemma-4-E2B-it.litertlm"
+    private const val E4B = "gemma-4-E4B-it.litertlm"
+
+    private fun urlFor(size: String) =
+        "https://huggingface.co/litert-community/gemma-4-" + size + "-it-litert-lm/resolve/main/gemma-4-" + size + "-it.litertlm"
+
+    private fun bigPhone(ctx: Context): Boolean {
+        val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val mi = android.app.ActivityManager.MemoryInfo()
+        am.getMemoryInfo(mi)
+        return mi.totalMem >= 7_000_000_000L
+    }
+
+    private fun targetName(ctx: Context) = if (bigPhone(ctx)) E4B else E2B
 
     var state by mutableStateOf(AiState.Missing)
         private set
@@ -43,16 +54,29 @@ object LocalAi {
     private val engineLock = Mutex()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private fun modelFile(ctx: Context): File {
+    private fun modelsDir(ctx: Context): File {
         val dir = File(ctx.filesDir, "models")
         dir.mkdirs()
-        return File(dir, MODEL_NAME)
+        return dir
     }
+
+    private fun has(f: File) = f.exists() && f.length() > 0
+
+    private fun modelFile(ctx: Context): File {
+        val dir = modelsDir(ctx)
+        val big = File(dir, E4B)
+        val small = File(dir, E2B)
+        return if (has(big)) big else if (has(small)) small else File(dir, targetName(ctx))
+    }
+
+    /** True when this phone can run the larger model and only the small one is installed. */
+    fun canUpgrade(ctx: Context): Boolean =
+        bigPhone(ctx) && !has(File(modelsDir(ctx), E4B)) && has(File(modelsDir(ctx), E2B)) &&
+            state != AiState.Downloading
 
     fun refresh(ctx: Context) {
         if (state == AiState.Downloading || state == AiState.Loading || state == AiState.Ready) return
-        val f = modelFile(ctx)
-        state = if (f.exists() && f.length() > 0) AiState.Installed else AiState.Missing
+        state = if (has(modelFile(ctx))) AiState.Installed else AiState.Missing
     }
 
     fun startDownload(ctx: Context) {
@@ -71,11 +95,12 @@ object LocalAi {
         state = AiState.Downloading
         progress = 0f
         message = ""
-        val target = modelFile(ctx)
-        val tmp = File(target.parentFile, MODEL_NAME + ".part")
+        val name = targetName(ctx)
+        val target = File(modelsDir(ctx), name)
+        val tmp = File(target.parentFile, name + ".part")
         try {
             val existing = if (tmp.exists()) tmp.length() else 0L
-            val conn = URL(MODEL_URL).openConnection() as HttpURLConnection
+            val conn = URL(urlFor(if (name == E4B) "E4B" else "E2B")).openConnection() as HttpURLConnection
             conn.instanceFollowRedirects = true
             conn.connectTimeout = 20000
             conn.readTimeout = 30000
@@ -109,9 +134,11 @@ object LocalAi {
             }
             if (target.exists()) target.delete()
             if (!tmp.renameTo(target)) throw java.io.IOException("Couldn't finish saving the model.")
+            try { engine?.close() } catch (t: Throwable) {}
+            engine = null
             state = AiState.Installed
         } catch (e: Exception) {
-            state = AiState.Missing
+            state = if (has(modelFile(ctx))) AiState.Installed else AiState.Missing
             message = "Download paused: " + (e.message ?: "connection lost") + ". Tap Download again to resume."
         }
     }
@@ -120,8 +147,8 @@ object LocalAi {
         state = AiState.Downloading
         progress = 0f
         message = ""
-        val target = modelFile(ctx)
-        val tmp = File(target.parentFile, MODEL_NAME + ".part")
+        val target = File(modelsDir(ctx), targetName(ctx))
+        val tmp = File(target.parentFile, target.name + ".part")
         try {
             ctx.contentResolver.openInputStream(uri).use { input ->
                 if (input == null) throw java.io.IOException("Couldn't open that file.")
@@ -213,7 +240,7 @@ object LocalAi {
             val known = existing.takeLast(40).joinToString("\n") { "- " + it.text }
             val system = "You maintain the story bible for a fiction writer. From their note, extract only concrete story facts worth keeping: " +
                 "Characters (people and their traits), Places (settings), Threads (plot events and story lines), Questions (open problems the writer must answer). " +
-                "Write each as a short, clear note in the writer's own terms. Output one per line exactly as: Category | note. " +
+                "Write each as a short, clear note in the writer's own terms. Output one per line exactly as: Category | Name | one-line detail. Name is 1 to 4 words (a character name, place name, plot thread title, or the question in a few words). Detail is one short line. " +
                 "At most 6 lines. No other text. If there is nothing worth keeping, output NONE.\n" +
                 (if (known.isNotEmpty()) "Already in the bible, do not repeat:\n" + known else "")
             val raw = taskLock.withLock {
@@ -224,10 +251,12 @@ object LocalAi {
             val seen = existing.map { it.text.lowercase() }.toMutableSet()
             val out = mutableListOf<Pair<String, String>>()
             for (line in raw.lines()) {
-                val parts = line.split("|", limit = 2)
+                val parts = line.split("|", limit = 3)
                 if (parts.size < 2) continue
                 val cat = BIBLE_CATEGORIES.firstOrNull { parts[0].contains(it, ignoreCase = true) } ?: continue
-                val text = parts[1].trim().trimStart('-', '*', ' ').trim()
+                val name = parts[1].trim().trimStart('-', '*', ' ').trim()
+                val detail = if (parts.size == 3) parts[2].trim() else ""
+                val text = if (detail.isNotEmpty()) name + ": " + detail else name
                 if (text.length < 3 || !seen.add(text.lowercase())) continue
                 out.add(cat to text)
             }

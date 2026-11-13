@@ -92,7 +92,13 @@ fun buildSystemPrompt(mode: Int, ideas: List<Idea>, bible: List<Entry>, history:
 }
 
 @Composable
-fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
+fun WorkshopScreen(
+    ideas: List<Idea>,
+    bible: List<Entry>,
+    top: androidx.compose.ui.unit.Dp,
+    bottom: androidx.compose.ui.unit.Dp,
+    onHold: (Boolean) -> Unit
+) {
     val c = LocalMarginColors.current
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -102,28 +108,33 @@ fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
 
     var messages by remember { mutableStateOf(listOf<Msg>()) }
     var talkMode by remember { mutableIntStateOf(-1) }
+    var holding by remember { mutableStateOf(false) }
     var lastMode by remember { mutableIntStateOf(0) }
     var busy by remember { mutableStateOf(false) }
-    var buf by remember { mutableStateOf("") }
     var part by remember { mutableStateOf("") }
+    var status by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
 
-    LaunchedEffect(Unit) { SpeechOut.prepare(context) }
+    LaunchedEffect(holding) { onHold(holding) }
+    LaunchedEffect(Unit) {
+        SpeechOut.prepare(context)
+        SpeechIn.prepare(context)
+    }
+
+    DisposableEffect(Unit) {
+        var engine: TextToSpeech? = null
+        engine = TextToSpeech(context) { st ->
+            if (st == TextToSpeech.SUCCESS) tts.value = engine
+        }
+        onDispose { engine?.shutdown() }
+    }
 
     fun say(sentence: String) {
         val clean = sentence.replace("*", "").replace("#", "").replace("_", " ").trim()
         if (clean.length < 2) return
         if (SpeechOut.ready) SpeechOut.speak(clean)
         else tts.value?.speak(clean, TextToSpeech.QUEUE_ADD, null, "reply")
-    }
-
-    DisposableEffect(Unit) {
-        var engine: TextToSpeech? = null
-        engine = TextToSpeech(context) { status ->
-            if (status == TextToSpeech.SUCCESS) tts.value = engine
-        }
-        onDispose { engine?.shutdown() }
     }
 
     fun send(text: String, mode: Int) {
@@ -156,35 +167,28 @@ fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
         }
     }
 
-    val voice = remember {
-        VoiceCapture(
+    val listener = remember {
+        Listener(
             context = context,
             onPartial = { part = it },
-            onSegment = { seg ->
-                buf = (buf + " " + seg).trim()
-                part = ""
-            },
-            onDone = {
+            onFinal = { t ->
                 val mode = talkMode
                 talkMode = -1
-                val t = (buf + " " + part).trim()
-                buf = ""
                 part = ""
                 if (mode >= 0) send(t, mode)
             },
+            onStatus = { status = it },
             onError = { note = it }
         )
     }
-    DisposableEffect(Unit) { onDispose { voice.release() } }
+    DisposableEffect(Unit) { onDispose { listener.release() } }
 
-    var pendingMode by remember { mutableIntStateOf(-1) }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (!granted) note = "Microphone permission is needed to talk."
-        pendingMode = -1
     }
 
     fun begin(mode: Int) {
-        if (busy) return
+        if (busy || holding) return
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
         ) {
@@ -195,15 +199,18 @@ fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
         tts.value?.stop()
         SpeechOut.stop()
         note = ""
-        buf = ""
         part = ""
         talkMode = mode
         lastMode = mode
-        voice.start()
+        holding = true
+        listener.start()
     }
 
     fun end() {
-        if (talkMode >= 0) voice.stop()
+        if (holding) {
+            holding = false
+            listener.stop()
+        }
     }
 
     val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -217,119 +224,156 @@ fun WorkshopScreen(ideas: List<Idea>, bible: List<Entry>) {
     val tints = listOf(Color(0x1A786E5F), Color(0x1AB8432A), Color(0x203C648C), Color(0x20467350))
     val tint by animateColorAsState(tints[lastMode], tween(600), label = "tint")
     val listState = rememberLazyListState()
-    val live = (buf + " " + part).trim()
-    LaunchedEffect(messages.size, messages.lastOrNull()?.text, live) {
-        val n = messages.size + (if (live.isNotEmpty()) 1 else 0)
+    LaunchedEffect(messages.size, messages.lastOrNull()?.text, part) {
+        val n = messages.size + (if (part.isNotEmpty()) 1 else 0)
         if (n > 0) listState.scrollToItem(n - 1)
     }
 
+    val voiceNote = when {
+        SpeechIn.downloading -> "Downloading speech model " + (SpeechIn.progress * 100).toInt() + "%"
+        else -> ""
+    }
+    val line = if (note.isNotEmpty()) note else if (status.isNotEmpty()) status else if (busy) "Thinking" else voiceNote
+
     Box(Modifier.fillMaxSize().background(tint)) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            if (!ready) {
-                Column(
-                    Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        "One-time download of the on-device model, about 2.6 GB. Use Wi-Fi.",
-                        fontSize = 15.sp,
-                        lineHeight = 22.sp,
-                        color = c.graphite
+        if (!ready) {
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .padding(start = 20.dp, end = 20.dp, top = top + 8.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    "One-time download of the on-device model. Use Wi-Fi.",
+                    fontSize = 15.sp,
+                    lineHeight = 22.sp,
+                    color = c.graphite
+                )
+                if (state == AiState.Downloading) {
+                    LinearProgressIndicator(
+                        progress = { LocalAi.progress },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = c.accent,
+                        trackColor = c.line
                     )
-                    if (state == AiState.Downloading) {
-                        LinearProgressIndicator(
-                            progress = { LocalAi.progress },
-                            modifier = Modifier.fillMaxWidth(),
-                            color = c.accent,
-                            trackColor = c.line
+                } else {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .background(c.accent, RoundedCornerShape(16.dp))
+                            .clickable { LocalAi.startDownload(context) },
+                        contentAlignment = Alignment.Center
+                    ) { Text("Download model", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.onAccent) }
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .clickable { importer.launch(arrayOf("*/*")) },
+                        contentAlignment = Alignment.Center
+                    ) { Text("Import a model file", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.ink) }
+                }
+                if (LocalAi.message.isNotEmpty()) {
+                    Text(LocalAi.message, fontSize = 14.sp, lineHeight = 20.sp, color = c.accent)
+                }
+            }
+        } else {
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 16.dp, end = 16.dp, top = top + 4.dp, bottom = 130.dp + bottom
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (LocalAi.canUpgrade(context)) {
+                    item {
+                        Text(
+                            "Get the larger, smarter model (3.7 GB)",
+                            modifier = Modifier
+                                .clickable { LocalAi.startDownload(context) }
+                                .padding(vertical = 6.dp),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = c.accent
                         )
-                    } else {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(52.dp)
-                                .background(c.accent, RoundedCornerShape(16.dp))
-                                .clickable { LocalAi.startDownload(context) },
-                            contentAlignment = Alignment.Center
-                        ) { Text("Download model", fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.onAccent) }
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .clickable { importer.launch(arrayOf("*/*")) },
-                            contentAlignment = Alignment.Center
-                        ) { Text("Import a model file", fontSize = 15.sp, fontWeight = FontWeight.Medium, color = c.ink) }
-                    }
-                    if (LocalAi.message.isNotEmpty()) {
-                        Text(LocalAi.message, fontSize = 14.sp, lineHeight = 20.sp, color = c.accent)
                     }
                 }
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(messages.size) { i ->
-                        val m = messages[i]
-                        Box(
-                            Modifier.fillMaxWidth(),
-                            contentAlignment = if (m.mine) Alignment.CenterEnd else Alignment.CenterStart
-                        ) {
+                items(messages.size) { i ->
+                    val m = messages[i]
+                    if (m.mine) {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
                             Text(
                                 m.text,
                                 modifier = Modifier
-                                    .fillMaxWidth(0.88f)
-                                    .background(if (m.mine) c.ink else c.card, RoundedCornerShape(18.dp))
-                                    .padding(horizontal = 14.dp, vertical = 12.dp),
-                                fontFamily = if (m.mine) FontFamily.SansSerif else FontFamily.Serif,
-                                fontSize = 16.sp,
-                                lineHeight = 22.sp,
-                                color = if (m.mine) c.paper else c.ink
+                                    .fillMaxWidth(0.82f)
+                                    .background(c.ink, RoundedCornerShape(18.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                fontSize = 15.sp,
+                                lineHeight = 21.sp,
+                                color = c.paper
+                            )
+                        }
+                    } else {
+                        Text(
+                            m.text,
+                            modifier = Modifier.fillMaxWidth(0.92f).padding(horizontal = 4.dp),
+                            fontFamily = FontFamily.Serif,
+                            fontSize = 18.sp,
+                            lineHeight = 26.sp,
+                            color = c.ink
+                        )
+                    }
+                }
+                if (part.isNotEmpty()) {
+                    item {
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
+                            Text(
+                                part,
+                                modifier = Modifier
+                                    .fillMaxWidth(0.82f)
+                                    .border(1.5.dp, c.line, RoundedCornerShape(18.dp))
+                                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                                fontStyle = FontStyle.Italic,
+                                fontSize = 15.sp,
+                                color = c.graphite
                             )
                         }
                     }
-                    if (live.isNotEmpty()) {
-                        item {
-                            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-                                Text(
-                                    live,
-                                    modifier = Modifier
-                                        .fillMaxWidth(0.88f)
-                                        .border(1.5.dp, c.line, RoundedCornerShape(18.dp))
-                                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                                    fontStyle = FontStyle.Italic,
-                                    fontSize = 16.sp,
-                                    lineHeight = 22.sp,
-                                    color = c.graphite
-                                )
-                            }
-                        }
-                    }
-                    if (state == AiState.Failed && messages.isEmpty()) {
-                        item { Text(LocalAi.message, fontSize = 14.sp, color = c.accent) }
-                    }
+                }
+                if (state == AiState.Failed && messages.isEmpty()) {
+                    item { Text(LocalAi.message, fontSize = 14.sp, color = c.accent) }
                 }
             }
+        }
 
+        Column(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0f to Color.Transparent, 0.35f to c.paper.copy(alpha = 0.9f), 1f to c.paper
+                    )
+                )
+                .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = bottom + 14.dp)
+        ) {
             Text(
-                if (note.isNotEmpty()) note else if (busy) "Thinking" else "",
+                line,
                 modifier = Modifier.fillMaxWidth().height(22.dp).padding(horizontal = 6.dp),
                 fontSize = 13.sp,
                 color = if (note.isNotEmpty()) c.accent else c.graphite
             )
-
             Row(
                 Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 22.dp)
                     .height(64.dp)
                     .clip(RoundedCornerShape(20.dp))
                     .background(c.card)
                     .border(1.dp, c.line, RoundedCornerShape(20.dp))
             ) {
                 MODE_WORDS.forEachIndexed { i, w ->
-                    val on = talkMode == i
+                    val on = holding && talkMode == i
                     if (i > 0) Box(Modifier.width(1.dp).fillMaxSize().padding(vertical = 14.dp).background(c.line))
                     Box(
                         Modifier

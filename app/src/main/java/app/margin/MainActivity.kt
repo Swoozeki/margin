@@ -12,6 +12,14 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBars
@@ -75,8 +83,8 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     var bible by remember { mutableStateOf(bibleStore.load()) }
     var recording by remember { mutableStateOf(false) }
     var latchedStop by remember { mutableStateOf(false) }
-    var buffer by remember { mutableStateOf("") }
-    var partial by remember { mutableStateOf("") }
+    var live by remember { mutableStateOf("") }
+    var wsHold by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var extracting by remember { mutableStateOf(false) }
     var proposals by remember { mutableStateOf<List<Proposal>?>(null) }
@@ -100,23 +108,18 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     }
 
     val voice = remember {
-        VoiceCapture(
+        Listener(
             context = context,
-            onPartial = { partial = it },
-            onSegment = { seg ->
-                buffer = (buffer + " " + seg).trim()
-                partial = ""
-            },
-            onDone = {
+            onPartial = { live = it },
+            onFinal = { text ->
                 recording = false
-                val text = (buffer + " " + partial).trim()
-                buffer = ""
-                partial = ""
+                live = ""
                 if (text.isNotEmpty()) {
                     ideas = store.add(text)
                     runExtract(text)
                 }
             },
+            onStatus = { message = it.ifEmpty { null } },
             onError = { message = it }
         )
     }
@@ -145,7 +148,11 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         voice.stop()
     }
 
-    LaunchedEffect(Unit) { LocalAi.refresh(context) }
+    LaunchedEffect(Unit) {
+        LocalAi.refresh(context)
+        SpeechIn.prepare(context)
+        SpeechOut.prepare(context)
+    }
 
     val pagerState = rememberPagerState(initialPage = 1) { 3 }
 
@@ -196,37 +203,58 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         else haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
     }
 
+    val sbTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val topPad = sbTop + 62.dp
+
     Box(Modifier.fillMaxSize().background(c.paper)) {
-        Column(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars)) {
+        HorizontalPager(
+            state = pagerState,
+            beyondViewportPageCount = 2,
+            userScrollEnabled = !(recording || wsHold),
+            modifier = Modifier.fillMaxSize()
+        ) { page ->
+            when (page) {
+                0 -> BibleScreen(bible, topPad, navBottom) { entry -> bible = bibleStore.remove(entry.id) }
+                1 -> RecordScreen(
+                    recording = recording,
+                    live = live,
+                    status = if (extracting) "Updating your Bible" else message,
+                    history = ideas,
+                    top = topPad,
+                    bottom = navBottom,
+                    onPress = {
+                        if (recording) {
+                            latchedStop = true
+                            stopRec()
+                        } else startRec()
+                    },
+                    onRelease = {
+                        if (latchedStop) latchedStop = false
+                        else if (recording) stopRec()
+                    },
+                    onPhoto = { photo() },
+                    onDelete = { idea -> ideas = store.remove(idea.id) },
+                    onExtract = { idea -> runExtract(idea.text) }
+                )
+                else -> WorkshopScreen(ideas, bible, topPad, navBottom) { wsHold = it }
+            }
+        }
+        Box(
+            Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth()
+                .background(
+                    Brush.verticalGradient(
+                        0f to c.paper, 0.75f to c.paper.copy(alpha = 0.85f), 1f to Color.Transparent
+                    )
+                )
+                .padding(top = sbTop, bottom = 12.dp)
+        ) {
             NavBar(
                 position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
                 onSelect = { scope.launch { pagerState.animateScrollToPage(it) } }
             )
-            HorizontalPager(state = pagerState, beyondViewportPageCount = 2, modifier = Modifier.weight(1f)) { page ->
-                when (page) {
-                    0 -> BibleScreen(bible) { entry -> bible = bibleStore.remove(entry.id) }
-                    1 -> RecordScreen(
-                        recording = recording,
-                        live = (buffer + " " + partial).trim(),
-                        status = if (extracting) "Updating your Bible" else message,
-                        history = ideas,
-                        onPress = {
-                            if (recording) {
-                                latchedStop = true
-                                stopRec()
-                            } else startRec()
-                        },
-                        onRelease = {
-                            if (latchedStop) latchedStop = false
-                            else if (recording) stopRec()
-                        },
-                        onPhoto = { photo() },
-                        onDelete = { idea -> ideas = store.remove(idea.id) },
-                        onExtract = { idea -> runExtract(idea.text) }
-                    )
-                    else -> WorkshopScreen(ideas, bible)
-                }
-            }
         }
         val pending = proposals
         if (pending != null) {

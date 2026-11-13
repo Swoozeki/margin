@@ -37,8 +37,9 @@ object SpeechOut {
 
     fun prepare(ctx: Context) {
         if (started) return
-        started = true
         val app = ctx.applicationContext
+        if (!File(app.filesDir, "voice/" + NAME + ".done").exists() && !onUnmetered(app)) return
+        started = true
         scope.launch {
             try {
                 val root = File(app.filesDir, "voice")
@@ -46,7 +47,7 @@ object SpeechOut {
                 val done = File(root, NAME + ".done")
                 if (!done.exists()) {
                     root.mkdirs()
-                    download(root)
+                    fetchTarBz2(URL_, root) { }
                     done.writeText("ok")
                 }
                 val cfg = getOfflineTtsConfig(
@@ -62,25 +63,6 @@ object SpeechOut {
             } catch (t: Throwable) {
                 ready = false
                 started = false
-            }
-        }
-    }
-
-    private fun download(root: File) {
-        val conn = URL(URL_).openConnection()
-        conn.connectTimeout = 20000
-        conn.readTimeout = 30000
-        TarArchiveInputStream(BZip2CompressorInputStream(BufferedInputStream(conn.getInputStream()))).use { tar ->
-            while (true) {
-                val e = tar.nextEntry ?: break
-                val out = File(root, e.name)
-                if (!out.canonicalPath.startsWith(root.canonicalPath)) continue
-                if (e.isDirectory) {
-                    out.mkdirs()
-                } else {
-                    out.parentFile?.mkdirs()
-                    out.outputStream().use { tar.copyTo(it) }
-                }
             }
         }
     }

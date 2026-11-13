@@ -31,7 +31,9 @@ jobs:
           TAG=$(git ls-remote --tags https://github.com/k2-fsa/sherpa-onnx | awk '{print $2}' | grep -E 'refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's#refs/tags/##' | sort -V | tail -1)
           echo "sherpa-onnx $TAG"
           mkdir -p app/src/main/java/com/k2fsa/sherpa/onnx app/src/main/jniLibs/arm64-v8a /tmp/sherpa
-          curl -fsSL -o app/src/main/java/com/k2fsa/sherpa/onnx/Tts.kt "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/$TAG/sherpa-onnx/kotlin-api/Tts.kt"
+          for f in Tts OfflineRecognizer OfflineStream FeatureConfig QnnConfig HomophoneReplacerConfig; do
+            curl -fsSL -o "app/src/main/java/com/k2fsa/sherpa/onnx/$f.kt" "https://raw.githubusercontent.com/k2-fsa/sherpa-onnx/$TAG/sherpa-onnx/kotlin-api/$f.kt"
+          done
           curl -fsSL -o /tmp/sherpa.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/$TAG/sherpa-onnx-$TAG-android.tar.bz2"
           tar xjf /tmp/sherpa.tar.bz2 -C /tmp/sherpa
           find /tmp/sherpa -path '*arm64-v8a*' -name '*.so' -exec cp {} app/src/main/jniLibs/arm64-v8a/ \;

@@ -146,7 +146,31 @@ fun NavBar(position: Float, onSelect: (Int) -> Unit) {
     }
 }
 
-private fun stamp(t: Long): String = SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(t))
+private fun clock(t: Long): String = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(t))
+
+private fun dayLabel(t: Long): String {
+    val now = java.util.Calendar.getInstance()
+    val then = java.util.Calendar.getInstance().apply { timeInMillis = t }
+    val days = ((now.get(java.util.Calendar.YEAR) - then.get(java.util.Calendar.YEAR)) * 366 +
+        now.get(java.util.Calendar.DAY_OF_YEAR) - then.get(java.util.Calendar.DAY_OF_YEAR))
+    return when (days) {
+        0 -> "Today"
+        1 -> "Yesterday"
+        else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(t))
+    }
+}
+
+/** First sentence as a title, the rest as the body. */
+private fun titleAndBody(text: String): Pair<String, String> {
+    val t = text.trim()
+    val m = Regex("[.!?](\\s|$)").find(t)
+    if (m != null && m.range.first in 8..70) {
+        val title = t.substring(0, m.range.first).trim()
+        return title to t.substring(m.range.last + 1).trim()
+    }
+    val title = if (t.length > 56) t.take(56).trimEnd() + "\u2026" else t
+    return title to (if (t.length > 56) t else "")
+}
 
 @Composable
 fun RecordScreen(
@@ -154,6 +178,8 @@ fun RecordScreen(
     live: String,
     status: String?,
     history: List<Idea>,
+    top: androidx.compose.ui.unit.Dp,
+    bottom: androidx.compose.ui.unit.Dp,
     onPress: () -> Unit,
     onRelease: () -> Unit,
     onPhoto: () -> Unit,
@@ -168,47 +194,71 @@ fun RecordScreen(
         infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Restart),
         label = "ring"
     )
+    val grouped = remember(history) { history.groupBy { dayLabel(it.createdAt) } }
 
-    Column(Modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-        ) {
-            if (recording) {
-                Text(
-                    if (live.isEmpty()) "Listening" else live,
-                    modifier = Modifier.padding(top = 12.dp),
-                    fontFamily = FontFamily.Cursive,
-                    fontSize = if (live.isEmpty()) 22.sp else 28.sp,
-                    lineHeight = 36.sp,
-                    color = if (live.isEmpty()) c.graphite else c.ink
-                )
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(history, key = { it.id }) { idea ->
+    Box(Modifier.fillMaxSize()) {
+        if (recording) {
+            Text(
+                if (live.isEmpty()) "Listening" else live,
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = top + 12.dp),
+                fontFamily = FontFamily.Cursive,
+                fontSize = if (live.isEmpty()) 22.sp else 28.sp,
+                lineHeight = 36.sp,
+                color = if (live.isEmpty()) c.graphite else c.ink
+            )
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                    start = 20.dp, end = 20.dp, top = top, bottom = 200.dp + bottom
+                ),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                for ((label, group) in grouped) {
+                    item(key = "d_" + label) {
+                        Text(
+                            label.uppercase(),
+                            modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            letterSpacing = 1.sp,
+                            color = c.graphite
+                        )
+                    }
+                    items(group, key = { it.id }) { idea ->
                         val expanded = open == idea.id
+                        val (title, body) = remember(idea.id) { titleAndBody(idea.text) }
                         Column(
                             Modifier
                                 .fillMaxWidth()
-                                .background(c.card, RoundedCornerShape(16.dp))
-                                .border(1.dp, c.line, RoundedCornerShape(16.dp))
+                                .background(c.card, RoundedCornerShape(14.dp))
                                 .clickable { open = if (expanded) null else idea.id }
-                                .padding(14.dp)
+                                .padding(horizontal = 14.dp, vertical = 11.dp)
                         ) {
-                            Text(stamp(idea.createdAt), fontSize = 12.sp, color = c.graphite)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                idea.text,
-                                fontFamily = FontFamily.Serif,
-                                fontSize = 16.sp,
-                                lineHeight = 23.sp,
-                                maxLines = if (expanded) Int.MAX_VALUE else 3,
-                                color = c.ink
-                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    title,
+                                    modifier = Modifier.weight(1f),
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    color = c.ink
+                                )
+                                Text(clock(idea.createdAt), modifier = Modifier.padding(start = 8.dp), fontSize = 12.sp, color = c.graphite)
+                            }
+                            if (body.isNotEmpty()) {
+                                Spacer(Modifier.height(3.dp))
+                                Text(
+                                    body,
+                                    fontFamily = FontFamily.Serif,
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp,
+                                    maxLines = if (expanded) Int.MAX_VALUE else 2,
+                                    color = c.graphite
+                                )
+                            }
                             if (expanded) {
-                                Spacer(Modifier.height(10.dp))
+                                Spacer(Modifier.height(8.dp))
                                 Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
                                     Text(
                                         "Update Bible",
@@ -228,58 +278,64 @@ fun RecordScreen(
             }
         }
 
-        Text(
-            status ?: "",
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(22.dp)
-                .padding(horizontal = 24.dp),
-            fontSize = 13.sp,
-            color = c.accent
-        )
-
-        Box(
+        Column(
             Modifier
+                .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(bottom = 22.dp, top = 4.dp)
-                .height(120.dp)
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        0f to Color.Transparent, 0.35f to c.paper.copy(alpha = 0.9f), 1f to c.paper
+                    )
+                )
+                .padding(top = 28.dp, bottom = bottom + 14.dp)
         ) {
-            Box(
-                Modifier
-                    .align(Alignment.CenterStart)
-                    .padding(start = 28.dp)
-                    .size(52.dp)
-                    .border(1.5.dp, c.line, CircleShape)
-                    .clip(CircleShape)
-                    .semantics { contentDescription = "Photograph a pencil page" }
-                    .clickable { onPhoto() },
-                contentAlignment = Alignment.Center
-            ) { Glyph(3, c.ink, 24.dp) }
-
-            Box(Modifier.align(Alignment.Center).size(120.dp), contentAlignment = Alignment.Center) {
-                if (recording) {
-                    for (k in 0..1) {
-                        val p = (ring + k * 0.5f) % 1f
-                        Box(
-                            Modifier
-                                .size(104.dp)
-                                .graphicsLayer {
-                                    scaleX = 1f + p * 0.16f
-                                    scaleY = 1f + p * 0.16f
-                                    alpha = 0.35f * (1f - p)
-                                }
-                                .background(c.accent, CircleShape)
-                        )
-                    }
-                }
+            Text(
+                status ?: "",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(22.dp)
+                    .padding(horizontal = 24.dp),
+                fontSize = 13.sp,
+                color = c.accent
+            )
+            Box(Modifier.fillMaxWidth().height(120.dp)) {
                 Box(
                     Modifier
-                        .size(if (recording) 112.dp else 104.dp)
-                        .background(c.accent, CircleShape)
-                        .semantics { contentDescription = "Hold to record" }
-                        .holdToTalk(onPress, onRelease),
+                        .align(Alignment.CenterStart)
+                        .padding(start = 28.dp)
+                        .size(52.dp)
+                        .border(1.5.dp, c.line, CircleShape)
+                        .clip(CircleShape)
+                        .semantics { contentDescription = "Photograph a pencil page" }
+                        .clickable { onPhoto() },
                     contentAlignment = Alignment.Center
-                ) { Glyph(1, c.onAccent, 44.dp) }
+                ) { Glyph(3, c.ink, 24.dp) }
+
+                Box(Modifier.align(Alignment.Center).size(120.dp), contentAlignment = Alignment.Center) {
+                    if (recording) {
+                        for (k in 0..1) {
+                            val p = (ring + k * 0.5f) % 1f
+                            Box(
+                                Modifier
+                                    .size(104.dp)
+                                    .graphicsLayer {
+                                        scaleX = 1f + p * 0.16f
+                                        scaleY = 1f + p * 0.16f
+                                        alpha = 0.35f * (1f - p)
+                                    }
+                                    .background(c.accent, CircleShape)
+                            )
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .size(if (recording) 112.dp else 104.dp)
+                            .background(c.accent, CircleShape)
+                            .semantics { contentDescription = "Hold to record" }
+                            .holdToTalk(onPress, onRelease),
+                        contentAlignment = Alignment.Center
+                    ) { Glyph(1, c.onAccent, 44.dp) }
+                }
             }
         }
     }
