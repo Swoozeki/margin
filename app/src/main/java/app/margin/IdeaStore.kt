@@ -32,6 +32,12 @@ class IdeaStore(context: Context) {
         return updated
     }
 
+    fun update(id: Long, text: String): List<Idea> {
+        val updated = load().map { if (it.id == id) it.copy(text = text) else it }
+        save(updated)
+        return updated
+    }
+
     fun remove(id: Long): List<Idea> {
         val updated = load().filter { it.id != id }
         save(updated)

@@ -88,12 +88,12 @@ object SpeechIn {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var started = false
 
-    fun prepare(ctx: Context) {
+    fun prepare(ctx: Context, force: Boolean = false) {
         if (started) return
         val app = ctx.applicationContext
         val root = File(app.filesDir, "stt")
         val done = File(root, NAME + ".done")
-        if (!done.exists() && !onUnmetered(app)) return
+        if (!done.exists() && !force && !AppSettings.mobileData && !onUnmetered(app)) return
         started = true
         scope.launch {
             try {

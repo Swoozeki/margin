@@ -233,6 +233,21 @@ object LocalAi {
         }
     }
 
+    /** Adds punctuation and capitalization without changing any words. Falls back to the original text. */
+    suspend fun punctuate(ctx: Context, text: String): String = withContext(Dispatchers.Default) {
+        val e = ensureEngine(ctx)
+        val system = "You fix speech-to-text transcripts. Add punctuation and capitalization, and start a new line between separate thoughts where it helps. Do not add, remove, reorder or change any words. Output only the corrected text."
+        val raw = taskLock.withLock {
+            e.createConversation(ConversationConfig(systemInstruction = Contents.of(system))).use { c ->
+                c.sendMessage(text).toString()
+            }
+        }.trim().trim('"', '`').trim()
+        fun toks(s: String) = s.lowercase().split(Regex("[^a-z0-9']+")).filter { it.isNotEmpty() }
+        val before = toks(text)
+        val after = toks(raw)
+        if (raw.isEmpty() || before.isEmpty() || kotlin.math.abs(before.size - after.size) > maxOf(2, before.size / 10)) text else raw
+    }
+
     var lastRaw = ""
 
     /** Reconciles the bible with a new note: adds new facts, edits corrected ones, removes dropped ones. */

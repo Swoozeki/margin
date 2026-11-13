@@ -112,7 +112,7 @@ fun Modifier.directionalHold(
     }
 }
 
-/** 0 book, 1 mic, 2 chat, 3 camera, 4 person, 5 pin, 6 thread, 7 question, 8 alert, 9 check, 10 info, 11 pencil, 12 bulb, 13 close */
+/** 0 book, 1 mic, 2 chat, 3 camera, 4 person, 5 pin, 6 thread, 7 question, 8 alert, 9 check, 10 info, 11 pencil, 12 bulb, 13 close, 14 gear */
 @Composable
 fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
     Canvas(Modifier.size(size)) {
@@ -189,6 +189,21 @@ fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
             13 -> {
                 drawLine(color, Offset(s * .24f, s * .24f), Offset(s * .76f, s * .76f), w * 1.3f, StrokeCap.Round)
                 drawLine(color, Offset(s * .76f, s * .24f), Offset(s * .24f, s * .76f), w * 1.3f, StrokeCap.Round)
+            }
+            14 -> {
+                drawCircle(color, s * .24f, Offset(s * .5f, s * .5f), style = st)
+                drawCircle(color, s * .07f, Offset(s * .5f, s * .5f))
+                for (k in 0 until 8) {
+                    val ang = k * Math.PI / 4
+                    val dx = Math.cos(ang).toFloat()
+                    val dy = Math.sin(ang).toFloat()
+                    drawLine(
+                        color,
+                        Offset(s * .5f + dx * s * .32f, s * .5f + dy * s * .32f),
+                        Offset(s * .5f + dx * s * .43f, s * .5f + dy * s * .43f),
+                        w * 1.5f, StrokeCap.Round
+                    )
+                }
             }
             else -> {
                 drawCircle(color, s * .38f, Offset(s * .5f, s * .5f), style = st)
@@ -364,5 +379,55 @@ fun MicDock(
                 contentAlignment = Alignment.Center
             ) { Glyph(if (danger) 13 else 1, c.onAccent, 34.dp) }
         }
+    }
+}
+
+private val NAV_NAMES = listOf("Bible", "Workshop")
+private val NAV_GLYPHS = listOf(0, 2)
+
+@Composable
+fun NavBar(position: Float, onSelect: (Int) -> Unit, onSettings: () -> Unit) {
+    val c = LocalMarginColors.current
+    val cell = 42.dp
+    Box(Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .width(cell * 2 + 8.dp)
+                .height(cell + 8.dp)
+                .background(c.card, CircleShape)
+                .border(1.dp, c.line, CircleShape)
+        ) {
+            Box(
+                Modifier
+                    .offset(x = 4.dp + cell * position, y = 4.dp)
+                    .size(cell)
+                    .background(c.accent, CircleShape)
+            )
+            Row(Modifier.padding(4.dp)) {
+                for (i in 0..1) {
+                    Box(
+                        Modifier
+                            .size(cell)
+                            .clip(CircleShape)
+                            .semantics { contentDescription = NAV_NAMES[i] }
+                            .clickable { onSelect(i) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Glyph(NAV_GLYPHS[i], if (kotlin.math.round(position).toInt() == i) c.onAccent else c.graphite)
+                    }
+                }
+            }
+        }
+        Box(
+            Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 16.dp)
+                .size(42.dp)
+                .border(1.dp, c.line, CircleShape)
+                .clip(CircleShape)
+                .semantics { contentDescription = "Settings" }
+                .clickable { onSettings() },
+            contentAlignment = Alignment.Center
+        ) { Glyph(14, c.graphite, 20.dp) }
     }
 }

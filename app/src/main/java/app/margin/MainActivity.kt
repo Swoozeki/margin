@@ -26,7 +26,9 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.activity.compose.BackHandler
+import android.content.Intent as ShareIntent
 import android.speech.tts.TextToSpeech
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.geometry.Offset
@@ -86,6 +88,8 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     val threads = remember { ThreadStore(context.applicationContext) }
     val prefs = remember { context.getSharedPreferences("margin", 0) }
     val scope = rememberCoroutineScope()
+    remember { AppSettings.init(context) }
+    var showSettings by remember { mutableStateOf(false) }
 
     var ideas by remember { mutableStateOf(store.load()) }
     var exchanges by remember { mutableStateOf(threads.load()) }
@@ -103,7 +107,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     var notice by remember { mutableStateOf<Notice?>(null) }
     val seq = remember { longArrayOf(0L) }
     var proposals by remember { mutableStateOf<List<Proposal>?>(null) }
-    val pagerState = rememberPagerState(initialPage = 0) { 5 }
+    val pagerState = rememberPagerState(initialPage = 1) { 2 }
 
     val tts = remember { mutableStateOf<TextToSpeech?>(null) }
     DisposableEffect(Unit) {
@@ -119,7 +123,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
 
     fun speak(sentence: String) {
         val clean = sentence.replace("*", "").replace("#", "").replace("_", " ").trim()
-        if (clean.length < 2) return
+        if (clean.length < 2 || !AppSettings.speakReplies) return
         if (SpeechOut.ready) SpeechOut.speak(clean)
         else tts.value?.speak(clean, TextToSpeech.QUEUE_ADD, null, "reply")
     }
@@ -144,7 +148,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     fun runExtract(text: String) {
         if (needsModel()) {
             say(Tone.Info, "Bible auto-fill needs the on-device model", null, "Set up") {
-                scope.launch { pagerState.animateScrollToPage(0) }
+                scope.launch { pagerState.animateScrollToPage(1) }
             }
             return
         }
@@ -171,7 +175,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     fun ask(text: String, mode: Int) {
         if (needsModel()) {
             say(Tone.Info, "Talking it through needs the on-device model", null, "Set up") {
-                scope.launch { pagerState.animateScrollToPage(0) }
+                scope.launch { pagerState.animateScrollToPage(1) }
             }
             return
         }
@@ -179,7 +183,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             say(Tone.Info, "Still thinking about your last one")
             return
         }
-        scope.launch { pagerState.animateScrollToPage(0) }
+        scope.launch { pagerState.animateScrollToPage(1) }
         scope.launch {
             busy = true
             val id = System.currentTimeMillis()
@@ -219,7 +223,23 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         }
         if (z == Z_CAPTURE) {
             ideas = store.add(text)
-            runExtract(text)
+            val added = ideas.maxByOrNull { it.id }
+            scope.launch {
+                var t = text
+                val words = text.trim().split(Regex("\\s+")).size
+                val marks = text.count { it == '.' || it == '?' || it == '!' }
+                val flat = marks < maxOf(1, words / 30) || text.first().isLowerCase()
+                if (AppSettings.tidyText && flat && added != null && !needsModel()) {
+                    say(Tone.Working, "Tidying your transcript")
+                    try {
+                        t = LocalAi.punctuate(context, text)
+                        ideas = store.update(added.id, t)
+                    } catch (e: Throwable) {
+                    }
+                    if (notice?.text == "Tidying your transcript") notice = null
+                }
+                if (AppSettings.autoBible) runExtract(t)
+            }
         } else ask(text, z)
     }
 
@@ -291,7 +311,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                     if (text.isNotBlank()) {
                         ideas = store.add(text)
                         notice = null
-                        runExtract(text)
+                        if (AppSettings.autoBible) runExtract(text)
                     } else {
                         say(Tone.Error, "Couldn't read that page", "Try again with better light and a flatter page.")
                     }
@@ -305,7 +325,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     fun photo() {
         if (needsModel()) {
             say(Tone.Info, "Page reading needs the on-device model", null, "Set up") {
-                scope.launch { pagerState.animateScrollToPage(0) }
+                scope.launch { pagerState.animateScrollToPage(1) }
             }
             return
         }
@@ -316,24 +336,32 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     LaunchedEffect(autoStart) {
         if (autoStart) {
             onAutoStartHandled()
-            pagerState.scrollToPage(0)
+            pagerState.scrollToPage(1)
             if (!recording) startRec()
         }
     }
 
     val sbTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val topPad = sbTop + 14.dp
+    val topPad = sbTop + 64.dp
     val bottomPad = 176.dp + navBottom
 
     Box(Modifier.fillMaxSize().background(c.paper)) {
-        VerticalPager(
+        HorizontalPager(
             state = pagerState,
             beyondViewportPageCount = 1,
             userScrollEnabled = !recording,
             modifier = Modifier.fillMaxSize()
         ) { page ->
             if (page == 0) {
+                BibleScreen(
+                    bible = bible,
+                    top = topPad,
+                    bottom = bottomPad,
+                    onRemove = { bible = bibleStore.remove(it.id) },
+                    onProbe = { e -> ask("Help me think through " + e.text, Z_QUESTION) }
+                )
+            } else {
                 StreamPage(
                     ideas = ideas,
                     exchanges = exchanges,
@@ -344,8 +372,6 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                     onDeleteIdea = { ideas = store.remove(it.id) },
                     onDeleteEx = { exchanges = threads.remove(it.id) }
                 )
-            } else {
-                BiblePage(page - 1, bible, topPad, bottomPad) { entry -> bible = bibleStore.remove(entry.id) }
             }
         }
 
@@ -353,25 +379,21 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .height(sbTop + 22.dp)
-                .background(Brush.verticalGradient(0f to c.paper, 0.6f to c.paper.copy(alpha = 0.85f), 1f to Color.Transparent))
-        )
+                .background(Brush.verticalGradient(0f to c.paper, 0.75f to c.paper.copy(alpha = 0.88f), 1f to Color.Transparent))
+                .padding(top = sbTop, bottom = 12.dp)
+        ) {
+            NavBar(
+                position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
+                onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
+                onSettings = { showSettings = true }
+            )
+        }
         Box(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .height(190.dp + navBottom)
                 .background(Brush.verticalGradient(0f to Color.Transparent, 0.45f to c.paper.copy(alpha = 0.9f), 1f to c.paper))
-        )
-
-        SectionRail(
-            position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
-            current = pagerState.currentPage,
-            counts = listOf(ideas.size) + BIBLE_CATEGORIES.map { cat -> bible.count { it.category == cat } },
-            onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 3.dp, top = topPad, bottom = 150.dp + navBottom)
         )
 
         HoldScrim(recording = recording, zone = zone, live = live, top = topPad)
@@ -405,6 +427,35 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             onPhoto = { photo() },
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = navBottom + 2.dp)
         )
+
+        BackHandler(enabled = showSettings) { showSettings = false }
+        if (showSettings) {
+            SettingsScreen(
+                top = sbTop + 10.dp,
+                bottom = navBottom,
+                onClose = { showSettings = false },
+                onExport = {
+                    val sb = StringBuilder("# Story Bible\n")
+                    for (cat in BIBLE_CATEGORIES) {
+                        val items = bible.filter { it.category == cat }
+                        if (items.isEmpty()) continue
+                        sb.append("\n## ").append(cat).append("\n")
+                        for (e in items) sb.append("- ").append(e.text).append("\n")
+                    }
+                    sb.append("\n# Recordings\n")
+                    val fmt = java.text.SimpleDateFormat("MMM d, yyyy h:mm a", java.util.Locale.getDefault())
+                    for (i in ideas.sortedBy { it.createdAt }) {
+                        sb.append("\n### ").append(fmt.format(java.util.Date(i.createdAt))).append("\n").append(i.text).append("\n")
+                    }
+                    val send = ShareIntent(ShareIntent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(ShareIntent.EXTRA_SUBJECT, "My story")
+                        putExtra(ShareIntent.EXTRA_TEXT, sb.toString())
+                    }
+                    context.startActivity(ShareIntent.createChooser(send, "Export your story"))
+                }
+            )
+        }
 
         NoticeBanner(
             notice = notice,
