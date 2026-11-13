@@ -49,11 +49,12 @@ fun BibleScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            item(key = "scene") { BibleScene(sel) }
             if (group.isEmpty()) {
                 item {
                     Text(
                         "Nothing here yet",
-                        modifier = Modifier.padding(top = 40.dp).fillMaxWidth(),
+                        modifier = Modifier.padding(top = 8.dp).fillMaxWidth(),
                         fontSize = 15.sp,
                         color = c.graphite,
                         textAlign = androidx.compose.ui.text.style.TextAlign.Center

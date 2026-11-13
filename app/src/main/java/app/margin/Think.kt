@@ -286,6 +286,7 @@ fun WorkshopScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                item(key = "scene") { TalkScene(lastMode) }
                 if (LocalAi.canUpgrade(context)) {
                     item {
                         Text(

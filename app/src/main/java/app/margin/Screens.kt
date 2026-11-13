@@ -214,6 +214,7 @@ fun RecordScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                item(key = "scene") { WriterScene() }
                 for ((label, group) in grouped) {
                     item(key = "d_" + label) {
                         Text(
