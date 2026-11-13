@@ -283,7 +283,7 @@ fun WorkshopScreen(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 16.dp, end = 16.dp, top = top + 4.dp, bottom = 130.dp + bottom
+                    start = 16.dp, end = 16.dp, top = top + 4.dp, bottom = 64.dp + bottom
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -352,48 +352,44 @@ fun WorkshopScreen(
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to Color.Transparent, 0.35f to c.paper.copy(alpha = 0.9f), 1f to c.paper
-                    )
-                )
-                .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = bottom + 14.dp)
+                .padding(bottom = bottom + 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(6.dp)
         ) {
-            Text(
-                line,
-                modifier = Modifier.fillMaxWidth().height(22.dp).padding(horizontal = 6.dp),
-                fontSize = 13.sp,
-                color = if (note.isNotEmpty()) c.accent else c.graphite
-            )
-            Row(
-                Modifier.fillMaxWidth().height(60.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(3.dp)
-            ) {
+            if (line.isNotEmpty()) {
+                Text(
+                    line,
+                    modifier = Modifier
+                        .background(c.card.copy(alpha = 0.92f), CircleShape)
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    fontSize = 12.sp,
+                    color = if (note.isNotEmpty()) c.accent else c.graphite
+                )
+            }
+            Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(2.dp)) {
                 val last = MODE_WORDS.size - 1
                 MODE_WORDS.forEachIndexed { i, w ->
                     val on = holding && talkMode == i
                     val shape = RoundedCornerShape(
-                        topStart = if (i == 0) 22.dp else 7.dp,
-                        bottomStart = if (i == 0) 22.dp else 7.dp,
-                        topEnd = if (i == last) 22.dp else 7.dp,
-                        bottomEnd = if (i == last) 22.dp else 7.dp
+                        topStart = if (i == 0) 17.dp else 5.dp,
+                        bottomStart = if (i == 0) 17.dp else 5.dp,
+                        topEnd = if (i == last) 17.dp else 5.dp,
+                        bottomEnd = if (i == last) 17.dp else 5.dp
                     )
                     Box(
                         Modifier
-                            .weight(1f)
-                            .fillMaxSize()
+                            .height(34.dp)
                             .clip(shape)
                             .background(if (on) c.accent else c.card)
                             .border(1.dp, if (on) c.accent else c.line, shape)
-                            .holdToTalk({ if (ready) begin(i) }, { end() }),
+                            .holdToTalk({ if (ready) begin(i) }, { end() })
+                            .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
                             w,
-                            fontSize = 14.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
-                            textAlign = TextAlign.Center,
                             color = if (on) c.onAccent else if (ready) c.ink else c.graphite
                         )
                     }
