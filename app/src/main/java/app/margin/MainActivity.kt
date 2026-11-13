@@ -99,7 +99,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             extracting = true
             try {
                 val found = LocalAi.extractBible(context, text, bibleStore.load())
-                if (found.isEmpty()) message = "Nothing new for the Bible."
+                if (found.isEmpty()) message = "Nothing new. Model said: " + LocalAi.lastRaw.replace("\n", " ").take(90)
                 else proposals = found.map { Proposal(it.first, it.second) }
             } catch (e: Throwable) {
                 message = "Couldn't update the Bible: " + (e.message ?: "unknown error")

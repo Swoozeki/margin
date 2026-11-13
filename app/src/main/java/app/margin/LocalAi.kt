@@ -233,29 +233,38 @@ object LocalAi {
         }
     }
 
+    var lastRaw = ""
+
     /** Pulls new story facts out of a spoken or written note. Returns (category, text) pairs. */
     suspend fun extractBible(ctx: Context, note: String, existing: List<Entry>): List<Pair<String, String>> =
         withContext(Dispatchers.Default) {
             val e = ensureEngine(ctx)
-            val known = existing.takeLast(40).joinToString("\n") { "- " + it.text }
-            val system = "You maintain the story bible for a fiction writer. From their note, extract only concrete story facts worth keeping: " +
-                "Characters (people and their traits), Places (settings), Threads (plot events and story lines), Questions (open problems the writer must answer). " +
-                "Write each as a short, clear note in the writer's own terms. Output one per line exactly as: Category | Name | one-line detail. Name is 1 to 4 words (a character name, place name, plot thread title, or the question in a few words). Detail is one short line. " +
-                "At most 6 lines. No other text. If there is nothing worth keeping, output NONE.\n" +
+            val known = existing.takeLast(30).joinToString("\n") { "- " + it.text }
+            val system = "You keep the story bible for a fiction writer. Read their note and pull out every story element worth keeping. " +
+                "Categories: Characters (people and their traits), Places (settings), Threads (plot events, story lines, ideas for what happens), Questions (open problems the writer needs to answer). " +
+                "Write one line per item exactly like: Category | Name | one short detail. Name is 1 to 4 words. At most 6 lines. Output only those lines.\n" +
+                "Example note: Maya is a retired lighthouse keeper who hides a letter. Maybe the harbor town floods in chapter three. Why does she lie to her son?\n" +
+                "Example output:\nCharacters | Maya | Retired lighthouse keeper hiding a letter\nPlaces | Harbor town | Floods in chapter three\nQuestions | Why Maya lies | What she is hiding from her son\n" +
                 (if (known.isNotEmpty()) "Already in the bible, do not repeat:\n" + known else "")
             val raw = taskLock.withLock {
                 e.createConversation(ConversationConfig(systemInstruction = Contents.of(system))).use { c ->
-                    c.sendMessage(note).toString()
+                    c.sendMessage("Note: " + note).toString()
                 }
             }
+            lastRaw = raw.trim()
+            val stems = listOf("character" to "Characters", "place" to "Places", "thread" to "Threads", "question" to "Questions")
             val seen = existing.map { it.text.lowercase() }.toMutableSet()
             val out = mutableListOf<Pair<String, String>>()
             for (line in raw.lines()) {
-                val parts = line.split("|", limit = 3)
-                if (parts.size < 2) continue
-                val cat = BIBLE_CATEGORIES.firstOrNull { parts[0].contains(it, ignoreCase = true) } ?: continue
-                val name = parts[1].trim().trimStart('-', '*', ' ').trim()
-                val detail = if (parts.size == 3) parts[2].trim() else ""
+                val cleaned = line.trim().replace("**", "")
+                    .trimStart { it == '-' || it == '*' || it == '\u2022' || it == ' ' || it.isDigit() || it == '.' || it == ')' }
+                val cat = stems.firstOrNull { cleaned.take(24).contains(it.first, ignoreCase = true) }?.second ?: continue
+                val idx = cleaned.indexOfFirst { it == '|' || it == ':' }
+                if (idx < 0) continue
+                val rest = cleaned.substring(idx + 1).trim().trim('|').trim()
+                val parts = rest.split("|", limit = 2).map { it.trim() }
+                val name = parts[0].trim('*', ' ')
+                val detail = parts.getOrNull(1) ?: ""
                 val text = if (detail.isNotEmpty()) name + ": " + detail else name
                 if (text.length < 3 || !seen.add(text.lowercase())) continue
                 out.add(cat to text)
