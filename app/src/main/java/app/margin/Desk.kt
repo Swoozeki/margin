@@ -40,122 +40,129 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextDecoration
 import kotlinx.coroutines.launch
 
+val RAIL_INSET = 64.dp
+private val RAIL_NAMES = listOf("Story", "Characters", "Places", "Threads", "Questions")
+private val RAIL_GLYPHS = listOf(2, 4, 5, 6, 7)
+
 @Composable
-fun BibleScreen(
+fun BiblePage(
+    p: Int,
     bible: List<Entry>,
     top: androidx.compose.ui.unit.Dp,
     bottom: androidx.compose.ui.unit.Dp,
     onRemove: (Entry) -> Unit
 ) {
     val c = LocalMarginColors.current
-    val vp = rememberPagerState { BIBLE_CATEGORIES.size }
-    val scope = rememberCoroutineScope()
-
-    Box(Modifier.fillMaxSize()) {
-        VerticalPager(vp, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { p ->
-            val cat = BIBLE_CATEGORIES[p]
-            val group = bible.filter { it.category == cat }
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 70.dp, end = 20.dp, top = top + 4.dp, bottom = 24.dp + bottom),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item(key = "scene") { Doodle(BIBLE_DOODLES[p], 140.dp) }
-                item(key = "title") {
-                    Text(
-                        cat.uppercase(),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 1.5.sp,
-                        color = c.accent,
-                        modifier = Modifier.padding(start = 4.dp, top = 4.dp)
-                    )
-                }
-                if (group.isEmpty()) {
-                    item {
-                        Text(
-                            "Nothing here yet",
-                            modifier = Modifier.padding(top = 4.dp, start = 4.dp),
-                            fontSize = 15.sp,
-                            color = c.graphite
-                        )
-                    }
-                }
-                items(group.size, key = { group[it].id }) { i ->
-                    val e = group[i]
-                    val cut = e.text.indexOf(": ")
-                    val name = if (cut in 1..40) e.text.substring(0, cut) else null
-                    val detail = if (name != null) e.text.substring(cut + 2) else e.text
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .background(c.card, RoundedCornerShape(14.dp))
-                            .padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-                            if (name != null) {
-                                Text(name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.ink)
-                            }
-                            if (detail.isNotEmpty()) {
-                                Text(
-                                    detail,
-                                    fontFamily = FontFamily.Serif,
-                                    fontSize = 14.sp,
-                                    lineHeight = 20.sp,
-                                    color = if (name != null) c.graphite else c.ink
-                                )
-                            }
-                        }
-                        Box(
-                            Modifier.size(44.dp).clickable { onRemove(e) },
-                            contentAlignment = Alignment.Center
-                        ) { Text("×", fontSize = 22.sp, color = c.graphite) }
-                    }
-                }
+    val cat = BIBLE_CATEGORIES[p]
+    val group = bible.filter { it.category == cat }
+    LazyColumn(
+        Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(start = RAIL_INSET, end = 18.dp, top = top, bottom = bottom),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        item(key = "scene") { Doodle(BIBLE_DOODLES[p], 150.dp) }
+        item(key = "title") {
+            Text(
+                cat.uppercase(),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.5.sp,
+                color = c.accent,
+                modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+            )
+        }
+        if (group.isEmpty()) {
+            item {
+                Text(
+                    "Nothing here yet. It fills in as you record.",
+                    modifier = Modifier.padding(start = 4.dp, top = 2.dp),
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                    fontFamily = FontFamily.Serif,
+                    color = c.graphite
+                )
             }
         }
-
-        val cellW = 46.dp
-        val cellH = 58.dp
-        Box(
-            Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 10.dp, top = top, bottom = bottom)
-                .width(cellW + 8.dp)
-                .height(cellH * BIBLE_CATEGORIES.size + 8.dp)
-                .background(c.card.copy(alpha = 0.94f), RoundedCornerShape(26.dp))
-                .border(1.dp, c.line, RoundedCornerShape(26.dp))
-        ) {
-            val pos = vp.currentPage + vp.currentPageOffsetFraction
-            Box(
+        items(group.size, key = { group[it].id }) { i ->
+            val e = group[i]
+            val cut = e.text.indexOf(": ")
+            val name = if (cut in 1..40) e.text.substring(0, cut) else null
+            val detail = if (name != null) e.text.substring(cut + 2) else e.text
+            Row(
                 Modifier
-                    .offset(x = 4.dp, y = 4.dp + cellH * pos)
-                    .size(cellW, cellH)
-                    .background(c.accent, RoundedCornerShape(22.dp))
-            )
-            Column(Modifier.padding(4.dp)) {
-                BIBLE_CATEGORIES.forEachIndexed { i, name ->
-                    val on = vp.currentPage == i
-                    val tint = if (on) c.onAccent else c.ink
-                    Column(
-                        Modifier
-                            .size(cellW, cellH)
-                            .clip(RoundedCornerShape(22.dp))
-                            .clickable { scope.launch { vp.animateScrollToPage(i) } }
-                            .androidx_semantics(name),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center
-                    ) {
-                        Glyph(4 + i, tint, 22.dp)
+                    .fillMaxWidth()
+                    .background(c.card, RoundedCornerShape(14.dp))
+                    .padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                    if (name != null) {
+                        Text(name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.ink)
+                    }
+                    if (detail.isNotEmpty()) {
                         Text(
-                            bible.count { it.category == name }.toString(),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = tint.copy(alpha = if (on) 1f else 0.7f),
-                            modifier = Modifier.padding(top = 3.dp)
+                            detail,
+                            fontFamily = FontFamily.Serif,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                            color = if (name != null) c.graphite else c.ink
                         )
                     }
+                }
+                Box(
+                    Modifier.size(44.dp).clickable { onRemove(e) },
+                    contentAlignment = Alignment.Center
+                ) { Text("×", fontSize = 22.sp, color = c.graphite) }
+            }
+        }
+    }
+}
+
+@Composable
+fun SectionRail(
+    position: Float,
+    current: Int,
+    counts: List<Int>,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val c = LocalMarginColors.current
+    val cellW = 44.dp
+    val cellH = 54.dp
+    Box(
+        modifier
+            .width(cellW + 8.dp)
+            .height(cellH * RAIL_NAMES.size + 8.dp)
+            .background(c.card.copy(alpha = 0.94f), RoundedCornerShape(26.dp))
+            .border(1.dp, c.line, RoundedCornerShape(26.dp))
+    ) {
+        Box(
+            Modifier
+                .offset(x = 4.dp, y = 4.dp + cellH * position)
+                .size(cellW, cellH)
+                .background(c.accent, RoundedCornerShape(22.dp))
+        )
+        Column(Modifier.padding(4.dp)) {
+            RAIL_NAMES.forEachIndexed { i, name ->
+                val on = current == i
+                val tint = if (on) c.onAccent else c.ink
+                Column(
+                    Modifier
+                        .size(cellW, cellH)
+                        .clip(RoundedCornerShape(22.dp))
+                        .clickable { onSelect(i) }
+                        .androidx_semantics(name),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Glyph(RAIL_GLYPHS[i], tint, 21.dp)
+                    Text(
+                        counts.getOrElse(i) { 0 }.toString(),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = tint.copy(alpha = if (on) 1f else 0.7f),
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
                 }
             }
         }

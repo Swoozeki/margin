@@ -1,16 +1,22 @@
 package app.margin
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,26 +24,20 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -50,27 +50,69 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import kotlin.math.roundToInt
+import kotlin.math.abs
 
-/** Press and hold: onStart when the finger lands, onEnd when it lifts or is cancelled. */
-fun Modifier.holdToTalk(onStart: () -> Unit, onEnd: () -> Unit): Modifier = composed {
-    val start = rememberUpdatedState(onStart)
-    val end = rememberUpdatedState(onEnd)
-    pointerInput(Unit) {
-        detectTapGestures(onPress = {
-            start.value()
-            tryAwaitRelease()
-            end.value()
-        })
+const val Z_CAPTURE = 0
+const val Z_QUESTION = 1
+const val Z_CRITIQUE = 2
+const val Z_TEACH = 3
+const val Z_CANCEL = 4
+
+fun zoneOf(dx: Float, dy: Float, dead: Float): Int {
+    if (dx * dx + dy * dy < dead * dead) return Z_CAPTURE
+    return if (abs(dx) > abs(dy)) {
+        if (dx < 0) Z_CRITIQUE else Z_TEACH
+    } else {
+        if (dy < 0) Z_QUESTION else Z_CANCEL
     }
 }
 
-/** 0 book, 1 mic, 2 chat, 3 camera, 4 person, 5 pin, 6 thread, 7 question, 8 alert, 9 check, 10 info */
+/**
+ * Press and hold. Dragging away from where the finger landed picks a direction
+ * (up, left, right, down); letting go reports the last one.
+ */
+fun Modifier.directionalHold(
+    onStart: () -> Unit,
+    onZone: (Int) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onEnd: (Int) -> Unit
+): Modifier = composed {
+    val s = rememberUpdatedState(onStart)
+    val z = rememberUpdatedState(onZone)
+    val d = rememberUpdatedState(onDrag)
+    val e = rememberUpdatedState(onEnd)
+    pointerInput(Unit) {
+        val dead = 46.dp.toPx()
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            down.consume()
+            s.value()
+            var zone = Z_CAPTURE
+            var clean = false
+            try {
+                while (true) {
+                    val ev = awaitPointerEvent()
+                    val ch = ev.changes.firstOrNull { it.id == down.id }
+                    if (ch == null) { clean = true; break }
+                    ch.consume()
+                    val off = ch.position - down.position
+                    d.value(off)
+                    val nz = zoneOf(off.x, off.y, dead)
+                    if (nz != zone) { zone = nz; z.value(nz) }
+                    if (!ch.pressed) { clean = true; break }
+                }
+            } finally {
+                d.value(Offset.Zero)
+                e.value(if (clean) zone else Z_CANCEL)
+            }
+        }
+    }
+}
+
+/** 0 book, 1 mic, 2 chat, 3 camera, 4 person, 5 pin, 6 thread, 7 question, 8 alert, 9 check, 10 info, 11 pencil, 12 bulb, 13 close */
 @Composable
 fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
     Canvas(Modifier.size(size)) {
@@ -132,6 +174,22 @@ fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
                 drawLine(color, Offset(s * .32f, s * .5f), Offset(s * .45f, s * .63f), w, StrokeCap.Round)
                 drawLine(color, Offset(s * .45f, s * .63f), Offset(s * .69f, s * .37f), w, StrokeCap.Round)
             }
+            11 -> {
+                drawLine(color, Offset(s * .3f, s * .7f), Offset(s * .7f, s * .3f), w * 2.6f, StrokeCap.Round)
+                drawLine(color, Offset(s * .16f, s * .84f), Offset(s * .3f, s * .7f), w * 1.2f, StrokeCap.Round)
+                drawLine(color, Offset(s * .5f, s * .9f), Offset(s * .88f, s * .9f), w, StrokeCap.Round)
+            }
+            12 -> {
+                drawCircle(color, s * .24f, Offset(s * .5f, s * .4f), style = st)
+                drawLine(color, Offset(s * .4f, s * .6f), Offset(s * .4f, s * .74f), w, StrokeCap.Round)
+                drawLine(color, Offset(s * .6f, s * .6f), Offset(s * .6f, s * .74f), w, StrokeCap.Round)
+                drawLine(color, Offset(s * .4f, s * .74f), Offset(s * .6f, s * .74f), w, StrokeCap.Round)
+                drawLine(color, Offset(s * .43f, s * .88f), Offset(s * .57f, s * .88f), w, StrokeCap.Round)
+            }
+            13 -> {
+                drawLine(color, Offset(s * .24f, s * .24f), Offset(s * .76f, s * .76f), w * 1.3f, StrokeCap.Round)
+                drawLine(color, Offset(s * .76f, s * .24f), Offset(s * .24f, s * .76f), w * 1.3f, StrokeCap.Round)
+            }
             else -> {
                 drawCircle(color, s * .38f, Offset(s * .5f, s * .5f), style = st)
                 drawCircle(color, s * .05f, Offset(s * .5f, s * .3f))
@@ -141,242 +199,170 @@ fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
     }
 }
 
-private val NAV_NAMES = listOf("Bible", "Record", "Workshop")
-private val NAV_GLYPHS = listOf(0, 1, 2)
+
+private val DOCK_W = 340.dp
+private val DOCK_H = 312.dp
+private val MIC_CX = 170.dp
+private val MIC_CY = 214.dp
+private val CUE_W = 108.dp
+private val CUE_H = 36.dp
+
+private val CAPTIONS = listOf(
+    "Capture" to "Let go to save to your story",
+    "Question" to "Ask me, or think aloud and I\u2019ll probe",
+    "Critique" to "Honest notes on what you say",
+    "Teach" to "Craft and research, explained",
+    "Cancel" to "Let go to discard"
+)
 
 @Composable
-fun NavBar(position: Float, onSelect: (Int) -> Unit) {
+fun HoldScrim(recording: Boolean, zone: Int, live: String, top: Dp) {
     val c = LocalMarginColors.current
-    val cell = 42.dp
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(top = 6.dp, bottom = 6.dp),
-        contentAlignment = Alignment.Center
+    AnimatedVisibility(recording, enter = fadeIn(tween(160)), exit = fadeOut(tween(160))) {
+        Box(Modifier.fillMaxSize().background(c.paper.copy(alpha = 0.95f))) {
+            Column(Modifier.padding(start = 26.dp, end = 26.dp, top = top + 10.dp)) {
+                val cap = CAPTIONS[zone]
+                Text(
+                    cap.first.uppercase(),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 2.sp,
+                    color = if (zone == Z_CANCEL) errorTone(c) else c.accent
+                )
+                Text(cap.second, fontSize = 13.sp, color = c.graphite, modifier = Modifier.padding(top = 2.dp, bottom = 16.dp))
+                Text(
+                    if (live.isEmpty()) "Listening\u2026" else live.takeLast(280),
+                    fontFamily = FontFamily.Cursive,
+                    fontSize = if (live.isEmpty()) 24.sp else 28.sp,
+                    lineHeight = 38.sp,
+                    color = if (live.isEmpty()) c.graphite else c.ink
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun Cue(label: String, glyph: Int, active: Boolean, danger: Boolean, fan: Float, modifier: Modifier) {
+    val c = LocalMarginColors.current
+    val sc by animateFloatAsState(if (active) 1.14f else 1f, tween(120), label = "cue")
+    val bg = when {
+        active && danger -> errorTone(c)
+        active -> c.accent
+        else -> c.card
+    }
+    val fg = if (active) (if (danger) Color.White else c.onAccent) else c.ink
+    Row(
+        modifier
+            .size(CUE_W, CUE_H)
+            .graphicsLayer {
+                alpha = fan
+                val k = sc * (0.7f + 0.3f * fan)
+                scaleX = k
+                scaleY = k
+            }
+            .shadow(if (active) 8.dp else 2.dp, CircleShape)
+            .background(bg, CircleShape)
+            .border(1.dp, if (active) bg else c.line, CircleShape),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        Glyph(glyph, fg, 16.dp)
+        Spacer(Modifier.width(6.dp))
+        Text(label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = fg)
+    }
+}
+
+@Composable
+fun MicDock(
+    recording: Boolean,
+    zone: Int,
+    drag: () -> Offset,
+    hint: Boolean,
+    onStart: () -> Unit,
+    onZone: (Int) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onEnd: (Int) -> Unit,
+    onPhoto: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val c = LocalMarginColors.current
+    val pulse = rememberInfiniteTransition(label = "mic")
+    val ring by pulse.animateFloat(
+        0f, 1f,
+        infiniteRepeatable(tween(1700, easing = LinearEasing), RepeatMode.Restart),
+        label = "ring"
+    )
+    val fan by animateFloatAsState(if (recording) 1f else 0f, tween(200), label = "fan")
+    val grow by animateFloatAsState(if (recording) 1.14f else 1f, tween(160), label = "grow")
+    val danger = recording && zone == Z_CANCEL
+    val micColor by animateColorAsState(if (danger) errorTone(c) else c.accent, tween(150), label = "micColor")
+
+    Box(modifier.size(DOCK_W, DOCK_H)) {
+        if (fan > 0.01f) {
+            Cue("Question", 7, zone == Z_QUESTION, false, fan, Modifier.offset(MIC_CX - CUE_W / 2, MIC_CY - 122.dp - CUE_H / 2))
+            Cue("Critique", 11, zone == Z_CRITIQUE, false, fan, Modifier.offset(MIC_CX - 112.dp - CUE_W / 2, MIC_CY - CUE_H / 2))
+            Cue("Teach", 12, zone == Z_TEACH, false, fan, Modifier.offset(MIC_CX + 112.dp - CUE_W / 2, MIC_CY - CUE_H / 2))
+            Cue("Cancel", 13, zone == Z_CANCEL, true, fan, Modifier.offset(MIC_CX - CUE_W / 2, MIC_CY + 70.dp - CUE_H / 2))
+        }
+
+        if (!recording && hint) {
+            Text(
+                "Hold to record \u00b7 drag to talk it through",
+                modifier = Modifier.fillMaxWidth().offset(y = MIC_CY - 82.dp),
+                fontSize = 12.sp,
+                color = c.graphite,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+            )
+        }
+
         Box(
             Modifier
-                .width(cell * 3 + 8.dp)
-                .height(cell + 8.dp)
-                .background(c.card, CircleShape)
-                .border(1.dp, c.line, CircleShape)
+                .offset(26.dp, MIC_CY - 26.dp)
+                .size(52.dp)
+                .graphicsLayer { alpha = 1f - fan }
+                .border(1.5.dp, c.line, CircleShape)
+                .clip(CircleShape)
+                .semantics { contentDescription = "Photograph a pencil page" }
+                .clickable(enabled = !recording) { onPhoto() },
+            contentAlignment = Alignment.Center
+        ) { Glyph(3, c.ink, 24.dp) }
+
+        // halo: slow breathing when idle, strong pulses while recording
+        for (k in 0..1) {
+            val p = (ring + k * 0.5f) % 1f
+            val a = if (recording) (1f - p) * 0.28f else if (k == 0) (1f - p) * 0.10f else 0f
+            val sz = 80.dp + (if (recording) 74.dp else 34.dp) * p
+            Box(
+                Modifier
+                    .offset(MIC_CX - sz / 2, MIC_CY - sz / 2)
+                    .size(sz)
+                    .background(micColor.copy(alpha = a), CircleShape)
+            )
+        }
+
+        Box(
+            Modifier
+                .offset(MIC_CX - 48.dp, MIC_CY - 48.dp)
+                .size(96.dp)
+                .graphicsLayer {
+                    val o = drag()
+                    val m = 26.dp.toPx()
+                    translationX = (o.x * 0.3f).coerceIn(-m, m)
+                    translationY = (o.y * 0.3f).coerceIn(-m, m)
+                }
+                .semantics { contentDescription = "Hold to record. Drag up for a question, left for critique, right to be taught." }
+                .directionalHold(onStart, onZone, onDrag, onEnd),
+            contentAlignment = Alignment.Center
         ) {
             Box(
                 Modifier
-                    .offset(x = 4.dp + cell * position, y = 4.dp)
-                    .size(cell)
-                    .background(c.accent, CircleShape)
-            )
-            Row(Modifier.padding(4.dp)) {
-                for (i in 0..2) {
-                    Box(
-                        Modifier
-                            .size(cell)
-                            .clip(CircleShape)
-                            .semantics { contentDescription = NAV_NAMES[i] }
-                            .clickable { onSelect(i) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Glyph(NAV_GLYPHS[i], if (position.roundToInt() == i) c.onAccent else c.graphite)
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun clock(t: Long): String = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(t))
-
-private fun dayLabel(t: Long): String {
-    val now = java.util.Calendar.getInstance()
-    val then = java.util.Calendar.getInstance().apply { timeInMillis = t }
-    val days = ((now.get(java.util.Calendar.YEAR) - then.get(java.util.Calendar.YEAR)) * 366 +
-        now.get(java.util.Calendar.DAY_OF_YEAR) - then.get(java.util.Calendar.DAY_OF_YEAR))
-    return when (days) {
-        0 -> "Today"
-        1 -> "Yesterday"
-        else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(t))
-    }
-}
-
-/** First sentence as a title, the rest as the body. */
-private fun titleAndBody(text: String): Pair<String, String> {
-    val t = text.trim()
-    val m = Regex("[.!?](\\s|$)").find(t)
-    if (m != null && m.range.first in 8..70) {
-        val title = t.substring(0, m.range.first).trim()
-        return title to t.substring(m.range.last + 1).trim()
-    }
-    val title = if (t.length > 56) t.take(56).trimEnd() + "\u2026" else t
-    return title to (if (t.length > 56) t else "")
-}
-
-@Composable
-fun RecordScreen(
-    recording: Boolean,
-    live: String,
-    status: String?,
-    history: List<Idea>,
-    top: androidx.compose.ui.unit.Dp,
-    bottom: androidx.compose.ui.unit.Dp,
-    onPress: () -> Unit,
-    onRelease: () -> Unit,
-    onPhoto: () -> Unit,
-    onDelete: (Idea) -> Unit,
-    onExtract: (Idea) -> Unit
-) {
-    val c = LocalMarginColors.current
-    var open by remember { mutableStateOf<Long?>(null) }
-    val pulse = rememberInfiniteTransition(label = "rings")
-    val ring by pulse.animateFloat(
-        0f, 1f,
-        infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Restart),
-        label = "ring"
-    )
-    val grouped = remember(history) { history.groupBy { dayLabel(it.createdAt) } }
-
-    Box(Modifier.fillMaxSize()) {
-        if (recording) {
-            Text(
-                if (live.isEmpty()) "Listening" else live,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = top + 12.dp),
-                fontFamily = FontFamily.Cursive,
-                fontSize = if (live.isEmpty()) 22.sp else 28.sp,
-                lineHeight = 36.sp,
-                color = if (live.isEmpty()) c.graphite else c.ink
-            )
-        } else {
-            LazyColumn(
-                Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 20.dp, end = 20.dp, top = top, bottom = 200.dp + bottom
-                ),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                item(key = "scene") { Doodle(R.drawable.art_book_writer, 190.dp) }
-                for ((label, group) in grouped) {
-                    item(key = "d_" + label) {
-                        Text(
-                            label.uppercase(),
-                            modifier = Modifier.padding(top = 10.dp, bottom = 2.dp),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            letterSpacing = 1.sp,
-                            color = c.graphite
-                        )
-                    }
-                    items(group, key = { it.id }) { idea ->
-                        val expanded = open == idea.id
-                        val (title, body) = remember(idea.id) { titleAndBody(idea.text) }
-                        Column(
-                            Modifier
-                                .fillMaxWidth()
-                                .background(c.card, RoundedCornerShape(14.dp))
-                                .clickable { open = if (expanded) null else idea.id }
-                                .padding(horizontal = 14.dp, vertical = 11.dp)
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    title,
-                                    modifier = Modifier.weight(1f),
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    color = c.ink
-                                )
-                                Text(clock(idea.createdAt), modifier = Modifier.padding(start = 8.dp), fontSize = 12.sp, color = c.graphite)
-                            }
-                            if (body.isNotEmpty()) {
-                                Spacer(Modifier.height(3.dp))
-                                Text(
-                                    body,
-                                    fontFamily = FontFamily.Serif,
-                                    fontSize = 14.sp,
-                                    lineHeight = 20.sp,
-                                    maxLines = if (expanded) Int.MAX_VALUE else 2,
-                                    color = c.graphite
-                                )
-                            }
-                            if (expanded) {
-                                Spacer(Modifier.height(8.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(22.dp)) {
-                                    Text(
-                                        "Update Bible",
-                                        modifier = Modifier.clickable { onExtract(idea) }.padding(vertical = 6.dp),
-                                        fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = c.accent
-                                    )
-                                    Text(
-                                        "Delete",
-                                        modifier = Modifier.clickable { onDelete(idea) }.padding(vertical = 6.dp),
-                                        fontSize = 14.sp, fontWeight = FontWeight.Medium, color = c.graphite
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        Column(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to Color.Transparent, 0.35f to c.paper.copy(alpha = 0.9f), 1f to c.paper
-                    )
-                )
-                .padding(top = 28.dp, bottom = bottom + 14.dp)
-        ) {
-            Text(
-                status ?: "",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(22.dp)
-                    .padding(horizontal = 24.dp),
-                fontSize = 13.sp,
-                color = c.accent
-            )
-            Box(Modifier.fillMaxWidth().height(120.dp)) {
-                Box(
-                    Modifier
-                        .align(Alignment.CenterStart)
-                        .padding(start = 28.dp)
-                        .size(52.dp)
-                        .border(1.5.dp, c.line, CircleShape)
-                        .clip(CircleShape)
-                        .semantics { contentDescription = "Photograph a pencil page" }
-                        .clickable { onPhoto() },
-                    contentAlignment = Alignment.Center
-                ) { Glyph(3, c.ink, 24.dp) }
-
-                Box(Modifier.align(Alignment.Center).size(120.dp), contentAlignment = Alignment.Center) {
-                    if (recording) {
-                        for (k in 0..1) {
-                            val p = (ring + k * 0.5f) % 1f
-                            Box(
-                                Modifier
-                                    .size(104.dp)
-                                    .graphicsLayer {
-                                        scaleX = 1f + p * 0.16f
-                                        scaleY = 1f + p * 0.16f
-                                        alpha = 0.35f * (1f - p)
-                                    }
-                                    .background(c.accent, CircleShape)
-                            )
-                        }
-                    }
-                    Box(
-                        Modifier
-                            .size(if (recording) 112.dp else 104.dp)
-                            .background(c.accent, CircleShape)
-                            .semantics { contentDescription = "Hold to record" }
-                            .holdToTalk(onPress, onRelease),
-                        contentAlignment = Alignment.Center
-                    ) { Glyph(1, c.onAccent, 44.dp) }
-                }
-            }
+                    .size(80.dp)
+                    .graphicsLayer { scaleX = grow; scaleY = grow }
+                    .shadow(if (recording) 14.dp else 8.dp, CircleShape)
+                    .background(micColor, CircleShape),
+                contentAlignment = Alignment.Center
+            ) { Glyph(if (danger) 13 else 1, c.onAccent, 34.dp) }
         }
     }
 }

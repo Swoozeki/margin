@@ -25,7 +25,10 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.VerticalPager
+import android.speech.tts.TextToSpeech
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -79,22 +82,45 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     val c = LocalMarginColors.current
     val store = remember { IdeaStore(context.applicationContext) }
     val bibleStore = remember { BibleStore(context.applicationContext) }
+    val threads = remember { ThreadStore(context.applicationContext) }
+    val prefs = remember { context.getSharedPreferences("margin", 0) }
     val scope = rememberCoroutineScope()
 
     var ideas by remember { mutableStateOf(store.load()) }
+    var exchanges by remember { mutableStateOf(threads.load()) }
     var bible by remember { mutableStateOf(bibleStore.load()) }
     var recording by remember { mutableStateOf(false) }
     var latchedStop by remember { mutableStateOf(false) }
     var live by remember { mutableStateOf("") }
-    var wsHold by remember { mutableStateOf(false) }
+    var zone by remember { mutableIntStateOf(Z_CAPTURE) }
+    var drag by remember { mutableStateOf(Offset.Zero) }
+    var liveEx by remember { mutableStateOf<Exchange?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    var dragUses by remember { mutableIntStateOf(prefs.getInt("dragUses", 0)) }
+    val pendingZone = remember { intArrayOf(Z_CAPTURE) }
+
     var notice by remember { mutableStateOf<Notice?>(null) }
     val seq = remember { longArrayOf(0L) }
     var proposals by remember { mutableStateOf<List<Proposal>?>(null) }
-    val pagerState = rememberPagerState(initialPage = 1) { 3 }
+    val pagerState = rememberPagerState(initialPage = 0) { 5 }
+
+    val tts = remember { mutableStateOf<TextToSpeech?>(null) }
+    DisposableEffect(Unit) {
+        var engine: TextToSpeech? = null
+        engine = TextToSpeech(context) { st -> if (st == TextToSpeech.SUCCESS) tts.value = engine }
+        onDispose { engine?.shutdown() }
+    }
 
     fun say(tone: Tone, text: String, detail: String? = null, action: String? = null, onAction: (() -> Unit)? = null) {
         seq[0] = seq[0] + 1
         notice = Notice(seq[0], tone, text, detail, action, onAction)
+    }
+
+    fun speak(sentence: String) {
+        val clean = sentence.replace("*", "").replace("#", "").replace("_", " ").trim()
+        if (clean.length < 2) return
+        if (SpeechOut.ready) SpeechOut.speak(clean)
+        else tts.value?.speak(clean, TextToSpeech.QUEUE_ADD, null, "reply")
     }
 
     LaunchedEffect(notice?.id) {
@@ -112,10 +138,12 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         }
     }
 
+    fun needsModel(): Boolean = LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading
+
     fun runExtract(text: String) {
-        if (LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading) {
+        if (needsModel()) {
             say(Tone.Info, "Bible auto-fill needs the on-device model", null, "Set up") {
-                scope.launch { pagerState.animateScrollToPage(2) }
+                scope.launch { pagerState.animateScrollToPage(0) }
             }
             return
         }
@@ -139,6 +167,61 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         }
     }
 
+    fun ask(text: String, mode: Int) {
+        if (needsModel()) {
+            say(Tone.Info, "Talking it through needs the on-device model", null, "Set up") {
+                scope.launch { pagerState.animateScrollToPage(0) }
+            }
+            return
+        }
+        if (busy) {
+            say(Tone.Info, "Still thinking about your last one")
+            return
+        }
+        scope.launch { pagerState.animateScrollToPage(0) }
+        scope.launch {
+            busy = true
+            val id = System.currentTimeMillis()
+            liveEx = Exchange(id, mode, text, "", id)
+            try {
+                val hist = exchanges.takeLast(3).flatMap { listOf(Msg(true, it.ask), Msg(false, it.answer)) }
+                val system = buildSystemPrompt(mode, ideas, bible, hist)
+                val sb = StringBuilder()
+                var spoken = 0
+                LocalAi.reply(context, system, text) { piece ->
+                    sb.append(piece)
+                    liveEx = Exchange(id, mode, text, sb.toString(), id)
+                    val m = Regex("[.!?\\n](\\s|$)").findAll(sb.substring(spoken)).lastOrNull()
+                    if (m != null) {
+                        val end = spoken + m.range.last + 1
+                        speak(sb.substring(spoken, end))
+                        spoken = end
+                    }
+                }
+                if (spoken < sb.length) speak(sb.substring(spoken))
+                val answer = sb.toString().trim()
+                if (answer.isNotEmpty()) exchanges = threads.add(mode, text, answer)
+                else say(Tone.Info, "No reply this time", "Try asking again.")
+            } catch (e: Throwable) {
+                say(Tone.Error, "The model hit a problem", e.message, "Retry") { ask(text, mode) }
+            }
+            liveEx = null
+            busy = false
+        }
+    }
+
+    fun finish(text: String, z: Int) {
+        if (z == Z_CANCEL) return
+        if (text.isBlank()) {
+            say(Tone.Info, "Didn't catch that", "Hold the mic and try again.")
+            return
+        }
+        if (z == Z_CAPTURE) {
+            ideas = store.add(text)
+            runExtract(text)
+        } else ask(text, z)
+    }
+
     val voice = remember {
         Listener(
             context = context,
@@ -146,10 +229,8 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             onFinal = { text ->
                 recording = false
                 live = ""
-                if (text.isNotEmpty()) {
-                    ideas = store.add(text)
-                    runExtract(text)
-                }
+                finish(text, pendingZone[0])
+                pendingZone[0] = Z_CAPTURE
             },
             onStatus = { s ->
                 if (s.isEmpty()) {
@@ -174,12 +255,18 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         }
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         if (notice?.tone != Tone.Working) notice = null
+        tts.value?.stop()
+        SpeechOut.stop()
+        zone = Z_CAPTURE
+        drag = Offset.Zero
+        pendingZone[0] = Z_CAPTURE
         recording = true
         voice.start()
     }
 
-    fun stopRec() {
+    fun stopRec(z: Int) {
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        pendingZone[0] = z
         recording = false
         voice.stop()
     }
@@ -215,9 +302,9 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     }
 
     fun photo() {
-        if (LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading) {
+        if (needsModel()) {
             say(Tone.Info, "Page reading needs the on-device model", null, "Set up") {
-                scope.launch { pagerState.animateScrollToPage(2) }
+                scope.launch { pagerState.animateScrollToPage(0) }
             }
             return
         }
@@ -228,75 +315,102 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     LaunchedEffect(autoStart) {
         if (autoStart) {
             onAutoStartHandled()
-            pagerState.scrollToPage(1)
+            pagerState.scrollToPage(0)
             if (!recording) startRec()
         }
     }
 
-    var firstSettle by remember { mutableStateOf(true) }
-    LaunchedEffect(pagerState.settledPage) {
-        if (firstSettle) firstSettle = false
-        else haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-    }
-
     val sbTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val navBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val topPad = sbTop + 62.dp
+    val topPad = sbTop + 14.dp
+    val bottomPad = 176.dp + navBottom
 
     Box(Modifier.fillMaxSize().background(c.paper)) {
-        HorizontalPager(
+        VerticalPager(
             state = pagerState,
-            beyondViewportPageCount = 2,
-            userScrollEnabled = !(recording || wsHold),
+            beyondViewportPageCount = 1,
+            userScrollEnabled = !recording,
             modifier = Modifier.fillMaxSize()
         ) { page ->
-            when (page) {
-                0 -> BibleScreen(bible, topPad, navBottom) { entry -> bible = bibleStore.remove(entry.id) }
-                1 -> RecordScreen(
-                    recording = recording,
-                    live = live,
-                    status = null,
-                    history = ideas,
+            if (page == 0) {
+                StreamPage(
+                    ideas = ideas,
+                    exchanges = exchanges,
+                    live = liveEx,
                     top = topPad,
-                    bottom = navBottom,
-                    onPress = {
-                        if (recording) {
-                            latchedStop = true
-                            stopRec()
-                        } else startRec()
-                    },
-                    onRelease = {
-                        if (latchedStop) latchedStop = false
-                        else if (recording) stopRec()
-                    },
-                    onPhoto = { photo() },
-                    onDelete = { idea -> ideas = store.remove(idea.id) },
-                    onExtract = { idea -> runExtract(idea.text) }
+                    bottom = bottomPad,
+                    onExtract = { runExtract(it.text) },
+                    onDeleteIdea = { ideas = store.remove(it.id) },
+                    onDeleteEx = { exchanges = threads.remove(it.id) }
                 )
-                else -> WorkshopScreen(ideas, bible, topPad, navBottom) { wsHold = it }
+            } else {
+                BiblePage(page - 1, bible, topPad, bottomPad) { entry -> bible = bibleStore.remove(entry.id) }
             }
         }
+
         Box(
             Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .background(
-                    Brush.verticalGradient(
-                        0f to c.paper, 0.75f to c.paper.copy(alpha = 0.85f), 1f to Color.Transparent
-                    )
-                )
-                .padding(top = sbTop, bottom = 12.dp)
-        ) {
-            NavBar(
-                position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
-                onSelect = { scope.launch { pagerState.animateScrollToPage(it) } }
-            )
-        }
+                .height(sbTop + 22.dp)
+                .background(Brush.verticalGradient(0f to c.paper, 0.6f to c.paper.copy(alpha = 0.85f), 1f to Color.Transparent))
+        )
+        Box(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .height(190.dp + navBottom)
+                .background(Brush.verticalGradient(0f to Color.Transparent, 0.45f to c.paper.copy(alpha = 0.9f), 1f to c.paper))
+        )
+
+        SectionRail(
+            position = pagerState.currentPage + pagerState.currentPageOffsetFraction,
+            current = pagerState.currentPage,
+            counts = listOf(ideas.size) + BIBLE_CATEGORIES.map { cat -> bible.count { it.category == cat } },
+            onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 8.dp, top = topPad, bottom = 150.dp + navBottom)
+        )
+
+        HoldScrim(recording = recording, zone = zone, live = live, top = topPad)
+
+        MicDock(
+            recording = recording,
+            zone = zone,
+            drag = { drag },
+            hint = dragUses < 3,
+            onStart = {
+                if (recording) {
+                    latchedStop = true
+                    stopRec(Z_CAPTURE)
+                } else startRec()
+            },
+            onZone = { z ->
+                zone = z
+                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            },
+            onDrag = { drag = it },
+            onEnd = { z ->
+                if (latchedStop) latchedStop = false
+                else if (recording) {
+                    if (z in Z_QUESTION..Z_TEACH) {
+                        dragUses += 1
+                        prefs.edit().putInt("dragUses", dragUses).apply()
+                    }
+                    stopRec(z)
+                }
+            },
+            onPhoto = { photo() },
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = navBottom + 2.dp)
+        )
+
         NoticeBanner(
             notice = notice,
             onDismiss = { notice = null },
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = topPad - 6.dp)
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = sbTop + 8.dp)
         )
+
         val pending = proposals
         if (pending != null) {
             ProposalDialog(
@@ -309,7 +423,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                     val summary = listOf(Act.ADD to "added", Act.EDIT to "edited", Act.REMOVE to "removed")
                         .map { (act, word) -> chosen.count { it.act == act } to word }
                         .filter { it.first > 0 }
-                        .joinToString(" \u00b7 ") { it.first.toString() + " " + it.second }
+                        .joinToString(" · ") { it.first.toString() + " " + it.second }
                     say(Tone.Success, "Bible updated", summary)
                 },
                 onDismiss = { proposals = null }
