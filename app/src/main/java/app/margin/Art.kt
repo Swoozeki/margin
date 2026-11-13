@@ -21,8 +21,8 @@ import kotlin.math.PI
 import kotlin.math.sin
 
 /**
- * Illustrations are from Open Doodles by Pablo Stanley (CC0, public domain),
- * recolored per theme (drawable / drawable-night) and given a slow, gentle float.
+ * Scenes are from unDraw (free to use, no attribution), recolored per theme
+ * (drawable / drawable-night) and given a slow, gentle float.
  */
 @Composable
 fun Doodle(@DrawableRes res: Int, height: Dp, modifier: Modifier = Modifier) {
@@ -43,5 +43,5 @@ fun Doodle(@DrawableRes res: Int, height: Dp, modifier: Modifier = Modifier) {
     )
 }
 
-val BIBLE_DOODLES = listOf(R.drawable.art_selfie, R.drawable.art_strolling, R.drawable.art_levitate, R.drawable.art_zombieing)
-val MODE_DOODLES = listOf(R.drawable.art_meditating, R.drawable.art_sitting, R.drawable.art_clumsy, R.drawable.art_readingside)
+val BIBLE_DOODLES = listOf(R.drawable.art_select_character, R.drawable.art_town, R.drawable.art_adventure_map, R.drawable.art_thought_process)
+val MODE_DOODLES = listOf(R.drawable.art_audio_conversation, R.drawable.art_questions, R.drawable.art_teacher, R.drawable.art_teaching)

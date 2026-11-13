@@ -214,7 +214,7 @@ fun RecordScreen(
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                item(key = "scene") { Doodle(R.drawable.art_sittingreading, 180.dp) }
+                item(key = "scene") { Doodle(R.drawable.art_book_writer, 190.dp) }
                 for ((label, group) in grouped) {
                     item(key = "d_" + label) {
                         Text(

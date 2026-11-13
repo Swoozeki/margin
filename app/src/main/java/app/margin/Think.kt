@@ -243,7 +243,7 @@ fun WorkshopScreen(
                     .padding(start = 20.dp, end = 20.dp, top = top + 8.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Doodle(R.drawable.art_coffee, 150.dp)
+                Doodle(R.drawable.art_coffee_time, 170.dp)
                 Text(
                     "One-time download of the on-device model. Use Wi-Fi.",
                     fontSize = 15.sp,
