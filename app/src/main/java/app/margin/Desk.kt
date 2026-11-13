@@ -49,7 +49,7 @@ fun BibleScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            item(key = "scene") { BibleScene(sel) }
+            item(key = "scene") { androidx.compose.animation.Crossfade(sel, label = "bible") { Doodle(BIBLE_DOODLES[it], 140.dp) } }
             if (group.isEmpty()) {
                 item {
                     Text(
