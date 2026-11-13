@@ -71,10 +71,10 @@ object AppSettings {
         prefs?.edit()?.putBoolean(key, v)?.apply()
     }
 
-    fun setSpeakReplies(v: Boolean) { speakReplies = v; put("speakReplies", v) }
-    fun setTidyText(v: Boolean) { tidyText = v; put("tidyText", v) }
-    fun setAutoBible(v: Boolean) { autoBible = v; put("autoBible", v) }
-    fun setMobileData(v: Boolean) { mobileData = v; put("mobileData", v) }
+    fun updateSpeakReplies(v: Boolean) { speakReplies = v; put("speakReplies", v) }
+    fun updateTidyText(v: Boolean) { tidyText = v; put("tidyText", v) }
+    fun updateAutoBible(v: Boolean) { autoBible = v; put("autoBible", v) }
+    fun updateMobileData(v: Boolean) { mobileData = v; put("mobileData", v) }
 }
 
 @Composable
@@ -200,7 +200,7 @@ fun SettingsScreen(top: Dp, bottom: Dp, onClose: () -> Unit, onExport: () -> Uni
 
             SectionLabel("Voice")
             Group {
-                ToggleRow("Speak replies", "Read answers aloud as they arrive.", AppSettings.speakReplies) { AppSettings.setSpeakReplies(it) }
+                ToggleRow("Speak replies", "Read answers aloud as they arrive.", AppSettings.speakReplies) { AppSettings.updateSpeakReplies(it) }
                 Divider()
                 ActionRow(
                     "Speech recognition", speech,
@@ -211,16 +211,16 @@ fun SettingsScreen(top: Dp, bottom: Dp, onClose: () -> Unit, onExport: () -> Uni
                     "Download over mobile data", "Off keeps the 640 MB voice model to Wi-Fi.",
                     AppSettings.mobileData
                 ) {
-                    AppSettings.setMobileData(it)
+                    AppSettings.updateMobileData(it)
                     if (it) SpeechIn.prepare(ctx)
                 }
             }
 
             SectionLabel("Writing")
             Group {
-                ToggleRow("Fill the Bible after recordings", "You always confirm the changes first.", AppSettings.autoBible) { AppSettings.setAutoBible(it) }
+                ToggleRow("Fill the Bible after recordings", "You always confirm the changes first.", AppSettings.autoBible) { AppSettings.updateAutoBible(it) }
                 Divider()
-                ToggleRow("Add punctuation to transcripts", "Tidies what you said once you let go.", AppSettings.tidyText) { AppSettings.setTidyText(it) }
+                ToggleRow("Add punctuation to transcripts", "Tidies what you said once you let go.", AppSettings.tidyText) { AppSettings.updateTidyText(it) }
             }
 
             SectionLabel("Model")
