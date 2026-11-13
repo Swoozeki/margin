@@ -41,6 +41,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -86,25 +87,55 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
     var latchedStop by remember { mutableStateOf(false) }
     var live by remember { mutableStateOf("") }
     var wsHold by remember { mutableStateOf(false) }
-    var message by remember { mutableStateOf<String?>(null) }
-    var extracting by remember { mutableStateOf(false) }
+    var notice by remember { mutableStateOf<Notice?>(null) }
+    val seq = remember { longArrayOf(0L) }
     var proposals by remember { mutableStateOf<List<Proposal>?>(null) }
+    val pagerState = rememberPagerState(initialPage = 1) { 3 }
+
+    fun say(tone: Tone, text: String, detail: String? = null, action: String? = null, onAction: (() -> Unit)? = null) {
+        seq[0] = seq[0] + 1
+        notice = Notice(seq[0], tone, text, detail, action, onAction)
+    }
+
+    LaunchedEffect(notice?.id) {
+        val n = notice
+        if (n != null) {
+            val ms = when (n.tone) {
+                Tone.Working -> 0L
+                Tone.Info, Tone.Success -> 3500L
+                Tone.Error -> 9000L
+            }
+            if (ms > 0) {
+                delay(ms)
+                if (notice?.id == n.id) notice = null
+            }
+        }
+    }
 
     fun runExtract(text: String) {
         if (LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading) {
-            message = "Set up the model in Workshop to fill your Bible automatically."
+            say(Tone.Info, "Bible auto-fill needs the on-device model", null, "Set up") {
+                scope.launch { pagerState.animateScrollToPage(2) }
+            }
             return
         }
         scope.launch {
-            extracting = true
+            say(Tone.Working, "Updating your Bible")
             try {
                 val found = LocalAi.extractBible(context, text, bibleStore.load())
-                if (found.isEmpty()) message = "Nothing new. Model said: " + LocalAi.lastRaw.replace("\n", " ").take(90)
-                else proposals = found.map { Proposal(it.first, it.second) }
+                if (found.isEmpty()) {
+                    val raw = LocalAi.lastRaw.replace("\n", " ").trim()
+                    say(
+                        Tone.Info, "Your Bible is already up to date",
+                        if (raw.isEmpty() || raw.equals("none", ignoreCase = true)) null else "Model said: " + raw.take(120)
+                    )
+                } else {
+                    notice = null
+                    proposals = found
+                }
             } catch (e: Throwable) {
-                message = "Couldn't update the Bible: " + (e.message ?: "unknown error")
+                say(Tone.Error, "Couldn't update the Bible", e.message, "Retry") { runExtract(text) }
             }
-            extracting = false
         }
     }
 
@@ -120,14 +151,18 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                     runExtract(text)
                 }
             },
-            onStatus = { message = it.ifEmpty { null } },
-            onError = { message = it }
+            onStatus = { s ->
+                if (s.isEmpty()) {
+                    if (notice?.tone == Tone.Working && notice?.text != "Updating your Bible") notice = null
+                } else say(Tone.Working, s)
+            },
+            onError = { say(Tone.Error, "Couldn't capture audio", it) }
         )
     }
     DisposableEffect(Unit) { onDispose { voice.release() } }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (!granted) message = "Microphone permission is needed to record."
+        if (!granted) say(Tone.Error, "Microphone access is needed", "Allow it in Settings to record.")
     }
 
     fun startRec() {
@@ -138,7 +173,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             return
         }
         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-        message = null
+        if (notice?.tone != Tone.Working) notice = null
         recording = true
         voice.start()
     }
@@ -155,12 +190,10 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
         SpeechOut.prepare(context)
     }
 
-    val pagerState = rememberPagerState(initialPage = 1) { 3 }
-
     val photoFile = remember { File(context.cacheDir, "page.jpg") }
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
         if (ok) {
-            message = "Reading your page"
+            say(Tone.Working, "Reading your page")
             scope.launch {
                 try {
                     val prepared = withContext(Dispatchers.IO) {
@@ -169,13 +202,13 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                     val text = LocalAi.transcribe(context, prepared.absolutePath)
                     if (text.isNotBlank()) {
                         ideas = store.add(text)
-                        message = null
+                        notice = null
                         runExtract(text)
                     } else {
-                        message = "Couldn't read that page."
+                        say(Tone.Error, "Couldn't read that page", "Try again with better light and a flatter page.")
                     }
                 } catch (e: Throwable) {
-                    message = "Couldn't read the page: " + (e.message ?: "unknown error")
+                    say(Tone.Error, "Couldn't read the page", e.message)
                 }
             }
         }
@@ -183,7 +216,9 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
 
     fun photo() {
         if (LocalAi.state == AiState.Missing || LocalAi.state == AiState.Downloading) {
-            message = "Set up the model in Workshop first."
+            say(Tone.Info, "Page reading needs the on-device model", null, "Set up") {
+                scope.launch { pagerState.animateScrollToPage(2) }
+            }
             return
         }
         val uri = FileProvider.getUriForFile(context, context.packageName + ".files", photoFile)
@@ -220,7 +255,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                 1 -> RecordScreen(
                     recording = recording,
                     live = live,
-                    status = if (extracting) "Updating your Bible" else message,
+                    status = null,
                     history = ideas,
                     top = topPad,
                     bottom = navBottom,
@@ -257,14 +292,25 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
                 onSelect = { scope.launch { pagerState.animateScrollToPage(it) } }
             )
         }
+        NoticeBanner(
+            notice = notice,
+            onDismiss = { notice = null },
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = topPad - 6.dp)
+        )
         val pending = proposals
         if (pending != null) {
             ProposalDialog(
                 proposals = pending,
                 onToggle = { i -> proposals = pending.mapIndexed { j, p -> if (j == i) p.copy(on = !p.on) else p } },
                 onConfirm = {
-                    bible = bibleStore.addAll(pending.filter { it.on }.map { it.category to it.text })
+                    val chosen = pending.filter { it.on }
+                    bible = bibleStore.commit(chosen)
                     proposals = null
+                    val summary = listOf(Act.ADD to "added", Act.EDIT to "edited", Act.REMOVE to "removed")
+                        .map { (act, word) -> chosen.count { it.act == act } to word }
+                        .filter { it.first > 0 }
+                        .joinToString(" \u00b7 ") { it.first.toString() + " " + it.second }
+                    say(Tone.Success, "Bible updated", summary)
                 },
                 onDismiss = { proposals = null }
             )

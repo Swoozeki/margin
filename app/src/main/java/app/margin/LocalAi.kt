@@ -235,40 +235,82 @@ object LocalAi {
 
     var lastRaw = ""
 
-    /** Pulls new story facts out of a spoken or written note. Returns (category, text) pairs. */
-    suspend fun extractBible(ctx: Context, note: String, existing: List<Entry>): List<Pair<String, String>> =
+    /** Reconciles the bible with a new note: adds new facts, edits corrected ones, removes dropped ones. */
+    suspend fun extractBible(ctx: Context, note: String, existing: List<Entry>): List<Proposal> =
         withContext(Dispatchers.Default) {
             val e = ensureEngine(ctx)
-            val known = existing.takeLast(30).joinToString("\n") { "- " + it.text }
-            val system = "You keep the story bible for a fiction writer. Read their note and pull out every story element worth keeping. " +
-                "Categories: Characters (people and their traits), Places (settings), Threads (plot events, story lines, ideas for what happens), Questions (open problems the writer needs to answer). " +
-                "Write one line per item exactly like: Category | Name | one short detail. Name is 1 to 4 words. At most 6 lines. Output only those lines.\n" +
-                "Example note: Maya is a retired lighthouse keeper who hides a letter. Maybe the harbor town floods in chapter three. Why does she lie to her son?\n" +
-                "Example output:\nCharacters | Maya | Retired lighthouse keeper hiding a letter\nPlaces | Harbor town | Floods in chapter three\nQuestions | Why Maya lies | What she is hiding from her son\n" +
-                (if (known.isNotEmpty()) "Already in the bible, do not repeat:\n" + known else "")
+            val window = existing.takeLast(60)
+            val listing = if (window.isEmpty()) "(empty)"
+                else window.mapIndexed { i, x -> "" + (i + 1) + ". [" + x.category + "] " + x.text }.joinToString("\n")
+            val system = "You maintain the story bible for a fiction writer. You get the current bible as numbered lines, then a new note from the writer. " +
+                "Update the bible so it matches the note. If the note corrects or changes something already in the bible, EDIT that numbered line instead of adding a duplicate. " +
+                "If the note says something in the bible is wrong or dropped, REMOVE it. Only ADD things that are genuinely new. " +
+                "Categories: Characters (people and their traits), Places (settings), Threads (plot events and story lines), Questions (open problems for the writer). " +
+                "Output one line per change and nothing else, in exactly these forms:\n" +
+                "ADD | Category | Name | one short detail\n" +
+                "EDIT | number | Name | new one short detail\n" +
+                "REMOVE | number\n" +
+                "At most 8 lines. If nothing changes output NONE.\n\n" +
+                "Example bible:\n1. [Characters] Maya: Retired lighthouse keeper hiding a letter\n2. [Places] Harbor town: Floods in chapter three\n" +
+                "Example note: Actually Maya is a fisherwoman, not a keeper. The town never floods. Her son is named Tom.\n" +
+                "Example output:\nEDIT | 1 | Maya | Fisherwoman hiding a letter\nREMOVE | 2\nADD | Characters | Tom | Maya's son"
             val raw = taskLock.withLock {
                 e.createConversation(ConversationConfig(systemInstruction = Contents.of(system))).use { c ->
-                    c.sendMessage("Note: " + note).toString()
+                    c.sendMessage("Current bible:\n" + listing + "\n\nNew note: " + note).toString()
                 }
             }
             lastRaw = raw.trim()
             val stems = listOf("character" to "Characters", "place" to "Places", "thread" to "Threads", "question" to "Questions")
-            val seen = existing.map { it.text.lowercase() }.toMutableSet()
-            val out = mutableListOf<Pair<String, String>>()
+            fun catOf(s: String) = stems.firstOrNull { s.contains(it.first, ignoreCase = true) }?.second
+            fun nameOf(t: String): String {
+                val i = t.indexOf(": ")
+                return (if (i in 1..40) t.substring(0, i) else t).trim().lowercase()
+            }
+            fun entryAt(s: String): Entry? {
+                val n = s.filter { it.isDigit() }.toIntOrNull() ?: return null
+                return window.getOrNull(n - 1)
+            }
+            fun compose(name: String, detail: String?) = if (detail.isNullOrBlank()) name else name + ": " + detail
+            val touched = mutableSetOf<Long>()
+            val out = mutableListOf<Proposal>()
             for (line in raw.lines()) {
                 val cleaned = line.trim().replace("**", "")
-                    .trimStart { it == '-' || it == '*' || it == '\u2022' || it == ' ' || it.isDigit() || it == '.' || it == ')' }
-                val cat = stems.firstOrNull { cleaned.take(24).contains(it.first, ignoreCase = true) }?.second ?: continue
-                val idx = cleaned.indexOfFirst { it == '|' || it == ':' }
-                if (idx < 0) continue
-                val rest = cleaned.substring(idx + 1).trim().trim('|').trim()
-                val parts = rest.split("|", limit = 2).map { it.trim() }
-                val name = parts[0].trim('*', ' ')
-                val detail = parts.getOrNull(1) ?: ""
-                val text = if (detail.isNotEmpty()) name + ": " + detail else name
-                if (text.length < 3 || !seen.add(text.lowercase())) continue
-                out.add(cat to text)
+                    .trimStart { it == '-' || it == '*' || it == '•' || it == ' ' }
+                if (cleaned.isEmpty() || cleaned.startsWith("none", ignoreCase = true)) continue
+                val parts = cleaned.split("|").map { it.trim().trim('*', ' ') }
+                if (parts.size < 2) continue
+                val verb = parts[0].lowercase()
+                when {
+                    verb.startsWith("remove") || verb.startsWith("delete") -> {
+                        val t = entryAt(parts[1]) ?: continue
+                        if (touched.add(t.id)) out.add(Proposal(Act.REMOVE, t.category, t.text, t.id, t.text))
+                    }
+                    verb.startsWith("edit") || verb.startsWith("update") || verb.startsWith("change") -> {
+                        val t = entryAt(parts[1]) ?: continue
+                        val oldName = if (t.text.contains(": ")) t.text.substringBefore(": ") else ""
+                        val text = when {
+                            parts.size >= 4 -> compose(parts[2], parts[3])
+                            parts.size == 3 && parts[2].contains(": ") -> parts[2]
+                            parts.size == 3 && oldName.isNotEmpty() -> oldName + ": " + parts[2]
+                            parts.size == 3 -> parts[2]
+                            else -> continue
+                        }
+                        if (text != t.text && touched.add(t.id)) out.add(Proposal(Act.EDIT, t.category, text, t.id, t.text))
+                    }
+                    else -> {
+                        val rest = if (verb.startsWith("add")) parts.drop(1) else parts
+                        if (rest.size < 2 || rest[1].isEmpty()) continue
+                        val cat = catOf(rest[0]) ?: continue
+                        val text = compose(rest[1], rest.getOrNull(2))
+                        val same = existing.firstOrNull { it.category == cat && nameOf(it.text) == rest[1].lowercase() }
+                        if (same != null) {
+                            if (same.text != text && touched.add(same.id)) out.add(Proposal(Act.EDIT, cat, text, same.id, same.text))
+                        } else if (out.none { it.act == Act.ADD && it.text.equals(text, ignoreCase = true) }) {
+                            out.add(Proposal(Act.ADD, cat, text))
+                        }
+                    }
+                }
             }
-            out
+            out.take(8)
         }
 }

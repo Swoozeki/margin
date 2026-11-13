@@ -9,7 +9,16 @@ val BIBLE_CATEGORIES = listOf("Characters", "Places", "Threads", "Questions")
 
 data class Entry(val id: Long, val category: String, val text: String, val createdAt: Long)
 
-data class Proposal(val category: String, val text: String, val on: Boolean = true)
+enum class Act { ADD, EDIT, REMOVE }
+
+data class Proposal(
+    val act: Act,
+    val category: String,
+    val text: String,
+    val targetId: Long? = null,
+    val old: String? = null,
+    val on: Boolean = true
+)
 
 class BibleStore(context: Context) {
     private val file = File(context.filesDir, "bible.json")
@@ -44,6 +53,21 @@ class BibleStore(context: Context) {
         val updated = load() + items.map { Entry(base + (i++), it.first, it.second, base) }
         save(updated)
         return updated
+    }
+
+    fun commit(items: List<Proposal>): List<Entry> {
+        val base = System.currentTimeMillis()
+        var i = 0L
+        var list = load()
+        for (p in items) {
+            when (p.act) {
+                Act.ADD -> list = list + Entry(base + (i++), p.category, p.text, base)
+                Act.EDIT -> list = list.map { if (it.id == p.targetId) it.copy(text = p.text) else it }
+                Act.REMOVE -> list = list.filter { it.id != p.targetId }
+            }
+        }
+        save(list)
+        return list
     }
 
     fun remove(id: Long): List<Entry> {

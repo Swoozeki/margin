@@ -28,6 +28,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.pager.VerticalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextDecoration
+import kotlinx.coroutines.launch
 
 @Composable
 fun BibleScreen(
@@ -37,99 +48,122 @@ fun BibleScreen(
     onRemove: (Entry) -> Unit
 ) {
     val c = LocalMarginColors.current
-    var sel by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
-    val cat = BIBLE_CATEGORIES[sel]
-    val group = bible.filter { it.category == cat }
+    val vp = rememberPagerState { BIBLE_CATEGORIES.size }
+    val scope = rememberCoroutineScope()
 
     Box(Modifier.fillMaxSize()) {
-        LazyColumn(
-            Modifier.fillMaxSize(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 20.dp, end = 20.dp, top = top + 52.dp, bottom = 24.dp + bottom
-            ),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            item(key = "scene") { androidx.compose.animation.Crossfade(sel, label = "bible") { Doodle(BIBLE_DOODLES[it], 140.dp) } }
-            if (group.isEmpty()) {
-                item {
+        VerticalPager(vp, Modifier.fillMaxSize(), beyondViewportPageCount = 1) { p ->
+            val cat = BIBLE_CATEGORIES[p]
+            val group = bible.filter { it.category == cat }
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(start = 70.dp, end = 20.dp, top = top + 4.dp, bottom = 24.dp + bottom),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                item(key = "scene") { Doodle(BIBLE_DOODLES[p], 140.dp) }
+                item(key = "title") {
                     Text(
-                        "Nothing here yet",
-                        modifier = Modifier.padding(top = 8.dp).fillMaxWidth(),
-                        fontSize = 15.sp,
-                        color = c.graphite,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                        cat.uppercase(),
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 1.5.sp,
+                        color = c.accent,
+                        modifier = Modifier.padding(start = 4.dp, top = 4.dp)
                     )
                 }
-            }
-            items(group.size, key = { group[it].id }) { i ->
-                val e = group[i]
-                val cut = e.text.indexOf(": ")
-                val name = if (cut in 1..40) e.text.substring(0, cut) else null
-                val detail = if (name != null) e.text.substring(cut + 2) else e.text
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .background(c.card, RoundedCornerShape(14.dp))
-                        .padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 2.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
-                        if (name != null) {
-                            Text(name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.ink)
-                        }
-                        if (detail.isNotEmpty()) {
-                            Text(
-                                detail,
-                                fontFamily = FontFamily.Serif,
-                                fontSize = 14.sp,
-                                lineHeight = 20.sp,
-                                color = if (name != null) c.graphite else c.ink
-                            )
-                        }
+                if (group.isEmpty()) {
+                    item {
+                        Text(
+                            "Nothing here yet",
+                            modifier = Modifier.padding(top = 4.dp, start = 4.dp),
+                            fontSize = 15.sp,
+                            color = c.graphite
+                        )
                     }
-                    Box(
+                }
+                items(group.size, key = { group[it].id }) { i ->
+                    val e = group[i]
+                    val cut = e.text.indexOf(": ")
+                    val name = if (cut in 1..40) e.text.substring(0, cut) else null
+                    val detail = if (name != null) e.text.substring(cut + 2) else e.text
+                    Row(
                         Modifier
-                            .size(44.dp)
-                            .clickable { onRemove(e) },
-                        contentAlignment = Alignment.Center
-                    ) { Text("\u00d7", fontSize = 22.sp, color = c.graphite) }
+                            .fillMaxWidth()
+                            .background(c.card, RoundedCornerShape(14.dp))
+                            .padding(start = 14.dp, top = 6.dp, bottom = 6.dp, end = 2.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f).padding(vertical = 4.dp)) {
+                            if (name != null) {
+                                Text(name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, color = c.ink)
+                            }
+                            if (detail.isNotEmpty()) {
+                                Text(
+                                    detail,
+                                    fontFamily = FontFamily.Serif,
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp,
+                                    color = if (name != null) c.graphite else c.ink
+                                )
+                            }
+                        }
+                        Box(
+                            Modifier.size(44.dp).clickable { onRemove(e) },
+                            contentAlignment = Alignment.Center
+                        ) { Text("×", fontSize = 22.sp, color = c.graphite) }
+                    }
                 }
             }
         }
-        Row(
+
+        val cellW = 46.dp
+        val cellH = 58.dp
+        Box(
             Modifier
-                .fillMaxWidth()
-                .background(
-                    androidx.compose.ui.graphics.Brush.verticalGradient(
-                        0f to c.paper.copy(alpha = 0.92f), 1f to androidx.compose.ui.graphics.Color.Transparent
-                    )
-                )
-                .padding(start = 20.dp, end = 20.dp, top = top, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                .align(Alignment.CenterStart)
+                .padding(start = 10.dp, top = top, bottom = bottom)
+                .width(cellW + 8.dp)
+                .height(cellH * BIBLE_CATEGORIES.size + 8.dp)
+                .background(c.card.copy(alpha = 0.94f), RoundedCornerShape(26.dp))
+                .border(1.dp, c.line, RoundedCornerShape(26.dp))
         ) {
-            BIBLE_CATEGORIES.forEachIndexed { i, name ->
-                val n = bible.count { it.category == name }
-                val on = i == sel
-                Box(
-                    Modifier
-                        .weight(1f)
-                        .height(36.dp)
-                        .background(if (on) c.ink else c.card, CircleShape)
-                        .clickable { sel = i },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        name + (if (n > 0) " " + n else ""),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        color = if (on) c.paper else c.ink
-                    )
+            val pos = vp.currentPage + vp.currentPageOffsetFraction
+            Box(
+                Modifier
+                    .offset(x = 4.dp, y = 4.dp + cellH * pos)
+                    .size(cellW, cellH)
+                    .background(c.accent, RoundedCornerShape(22.dp))
+            )
+            Column(Modifier.padding(4.dp)) {
+                BIBLE_CATEGORIES.forEachIndexed { i, name ->
+                    val on = vp.currentPage == i
+                    val tint = if (on) c.onAccent else c.ink
+                    Column(
+                        Modifier
+                            .size(cellW, cellH)
+                            .clip(RoundedCornerShape(22.dp))
+                            .clickable { scope.launch { vp.animateScrollToPage(i) } }
+                            .androidx_semantics(name),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        Glyph(4 + i, tint, 22.dp)
+                        Text(
+                            bible.count { it.category == name }.toString(),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = tint.copy(alpha = if (on) 1f else 0.7f),
+                            modifier = Modifier.padding(top = 3.dp)
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+private fun Modifier.androidx_semantics(label: String): Modifier =
+    this.then(Modifier.semantics { contentDescription = label })
 
 @Composable
 fun ProposalDialog(
@@ -148,10 +182,11 @@ fun ProposalDialog(
                 .padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text("Add to your Bible", fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, color = c.ink)
+            Text("Update your Bible", fontFamily = FontFamily.Serif, fontWeight = FontWeight.SemiBold, fontSize = 22.sp, color = c.ink)
             LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(proposals.size) { i ->
                     val p = proposals[i]
+                    val tone = if (p.act == Act.REMOVE) errorTone(c) else c.accent
                     Row(
                         Modifier
                             .fillMaxWidth()
@@ -164,13 +199,28 @@ fun ProposalDialog(
                             Modifier
                                 .padding(top = 2.dp)
                                 .size(20.dp)
-                                .background(if (p.on) c.accent else c.paper, CircleShape)
-                                .border(1.5.dp, if (p.on) c.accent else c.line, CircleShape),
+                                .background(if (p.on) tone else c.paper, CircleShape)
+                                .border(1.5.dp, if (p.on) tone else c.line, CircleShape),
                             contentAlignment = Alignment.Center
                         ) { if (p.on) Text("✓", fontSize = 12.sp, color = c.onAccent) }
                         Column(Modifier.padding(start = 12.dp)) {
-                            Text(p.category.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp, color = c.accent)
-                            Text(p.text, fontFamily = FontFamily.Serif, fontSize = 16.sp, lineHeight = 22.sp, color = c.ink)
+                            Text(
+                                p.act.name + " · " + p.category.uppercase(),
+                                fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 1.sp, color = tone
+                            )
+                            if (p.old != null) {
+                                Text(
+                                    p.old,
+                                    fontFamily = FontFamily.Serif,
+                                    fontSize = 14.sp,
+                                    lineHeight = 20.sp,
+                                    color = c.graphite,
+                                    textDecoration = TextDecoration.LineThrough
+                                )
+                            }
+                            if (p.act != Act.REMOVE) {
+                                Text(p.text, fontFamily = FontFamily.Serif, fontSize = 16.sp, lineHeight = 22.sp, color = c.ink)
+                            }
                         }
                     }
                 }
@@ -191,7 +241,7 @@ fun ProposalDialog(
                         .background(if (count > 0) c.accent else c.line, RoundedCornerShape(14.dp))
                         .clickable(enabled = count > 0) { onConfirm() },
                     contentAlignment = Alignment.Center
-                ) { Text("Add " + count, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = if (count > 0) c.onAccent else c.graphite) }
+                ) { Text("Apply " + count, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = if (count > 0) c.onAccent else c.graphite) }
             }
         }
     }

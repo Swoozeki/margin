@@ -367,21 +367,25 @@ fun WorkshopScreen(
                 color = if (note.isNotEmpty()) c.accent else c.graphite
             )
             Row(
-                Modifier
-                    .fillMaxWidth()
-                    .height(64.dp)
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(c.card)
-                    .border(1.dp, c.line, RoundedCornerShape(20.dp))
+                Modifier.fillMaxWidth().height(60.dp),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(3.dp)
             ) {
+                val last = MODE_WORDS.size - 1
                 MODE_WORDS.forEachIndexed { i, w ->
                     val on = holding && talkMode == i
-                    if (i > 0) Box(Modifier.width(1.dp).fillMaxSize().padding(vertical = 14.dp).background(c.line))
+                    val shape = RoundedCornerShape(
+                        topStart = if (i == 0) 22.dp else 7.dp,
+                        bottomStart = if (i == 0) 22.dp else 7.dp,
+                        topEnd = if (i == last) 22.dp else 7.dp,
+                        bottomEnd = if (i == last) 22.dp else 7.dp
+                    )
                     Box(
                         Modifier
                             .weight(1f)
                             .fillMaxSize()
-                            .background(if (on) c.accent else Color.Transparent)
+                            .clip(shape)
+                            .background(if (on) c.accent else c.card)
+                            .border(1.dp, if (on) c.accent else c.line, shape)
                             .holdToTalk({ if (ready) begin(i) }, { end() }),
                         contentAlignment = Alignment.Center
                     ) {

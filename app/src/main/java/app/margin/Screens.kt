@@ -70,7 +70,7 @@ fun Modifier.holdToTalk(onStart: () -> Unit, onEnd: () -> Unit): Modifier = comp
     }
 }
 
-/** 0 = book, 1 = mic, 2 = chat, 3 = camera */
+/** 0 book, 1 mic, 2 chat, 3 camera, 4 person, 5 pin, 6 thread, 7 question, 8 alert, 9 check, 10 info */
 @Composable
 fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
     Canvas(Modifier.size(size)) {
@@ -93,10 +93,49 @@ fun Glyph(kind: Int, color: Color, size: androidx.compose.ui.unit.Dp = 22.dp) {
                 drawLine(color, Offset(s * .32f, s * .68f), Offset(s * .26f, s * .88f), w, StrokeCap.Round)
                 drawLine(color, Offset(s * .26f, s * .88f), Offset(s * .5f, s * .68f), w, StrokeCap.Round)
             }
-            else -> {
+            3 -> {
                 drawRoundRect(color, Offset(s * .08f, s * .28f), Size(s * .84f, s * .58f), CornerRadius(s * .12f), style = st)
                 drawCircle(color, s * .16f, Offset(s * .5f, s * .57f), style = st)
                 drawLine(color, Offset(s * .36f, s * .18f), Offset(s * .64f, s * .18f), w, StrokeCap.Round)
+            }
+            4 -> {
+                drawCircle(color, s * .16f, Offset(s * .5f, s * .3f), style = st)
+                drawArc(color, 180f, 180f, false, Offset(s * .2f, s * .56f), Size(s * .6f, s * .6f), style = st)
+            }
+            5 -> {
+                drawCircle(color, s * .26f, Offset(s * .5f, s * .38f), style = st)
+                drawLine(color, Offset(s * .32f, s * .56f), Offset(s * .5f, s * .9f), w, StrokeCap.Round)
+                drawLine(color, Offset(s * .68f, s * .56f), Offset(s * .5f, s * .9f), w, StrokeCap.Round)
+                drawCircle(color, s * .07f, Offset(s * .5f, s * .38f))
+            }
+            6 -> {
+                val p = androidx.compose.ui.graphics.Path()
+                p.moveTo(s * .14f, s * .66f)
+                p.cubicTo(s * .3f, s * .2f, s * .45f, s * .2f, s * .5f, s * .5f)
+                p.cubicTo(s * .55f, s * .8f, s * .7f, s * .8f, s * .86f, s * .34f)
+                drawPath(p, color, style = st)
+                drawCircle(color, s * .06f, Offset(s * .14f, s * .66f))
+                drawCircle(color, s * .06f, Offset(s * .86f, s * .34f))
+            }
+            7 -> {
+                drawArc(color, 180f, 230f, false, Offset(s * .28f, s * .1f), Size(s * .44f, s * .4f), style = st)
+                drawLine(color, Offset(s * .5f, s * .5f), Offset(s * .5f, s * .66f), w, StrokeCap.Round)
+                drawCircle(color, s * .055f, Offset(s * .5f, s * .86f))
+            }
+            8 -> {
+                drawCircle(color, s * .38f, Offset(s * .5f, s * .5f), style = st)
+                drawLine(color, Offset(s * .5f, s * .28f), Offset(s * .5f, s * .54f), w, StrokeCap.Round)
+                drawCircle(color, s * .05f, Offset(s * .5f, s * .7f))
+            }
+            9 -> {
+                drawCircle(color, s * .38f, Offset(s * .5f, s * .5f), style = st)
+                drawLine(color, Offset(s * .32f, s * .5f), Offset(s * .45f, s * .63f), w, StrokeCap.Round)
+                drawLine(color, Offset(s * .45f, s * .63f), Offset(s * .69f, s * .37f), w, StrokeCap.Round)
+            }
+            else -> {
+                drawCircle(color, s * .38f, Offset(s * .5f, s * .5f), style = st)
+                drawCircle(color, s * .05f, Offset(s * .5f, s * .3f))
+                drawLine(color, Offset(s * .5f, s * .45f), Offset(s * .5f, s * .72f), w, StrokeCap.Round)
             }
         }
     }
