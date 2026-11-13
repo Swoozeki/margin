@@ -40,7 +40,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextDecoration
 import kotlinx.coroutines.launch
 
-val RAIL_INSET = 64.dp
+val RAIL_INSET = 16.dp
 private val RAIL_NAMES = listOf("Story", "Characters", "Places", "Threads", "Questions")
 private val RAIL_GLYPHS = listOf(2, 4, 5, 6, 7)
 
@@ -127,41 +127,42 @@ fun SectionRail(
     modifier: Modifier = Modifier
 ) {
     val c = LocalMarginColors.current
-    val cellW = 44.dp
-    val cellH = 54.dp
+    val cellW = 26.dp
+    val cellH = 33.dp
     Box(
         modifier
-            .width(cellW + 8.dp)
-            .height(cellH * RAIL_NAMES.size + 8.dp)
-            .background(c.card.copy(alpha = 0.94f), RoundedCornerShape(26.dp))
-            .border(1.dp, c.line, RoundedCornerShape(26.dp))
+            .width(cellW + 4.dp)
+            .height(cellH * RAIL_NAMES.size + 4.dp)
+            .background(c.card.copy(alpha = 0.82f), RoundedCornerShape(15.dp))
+            .border(1.dp, c.line.copy(alpha = 0.7f), RoundedCornerShape(15.dp))
     ) {
         Box(
             Modifier
-                .offset(x = 4.dp, y = 4.dp + cellH * position)
+                .offset(x = 2.dp, y = 2.dp + cellH * position)
                 .size(cellW, cellH)
-                .background(c.accent, RoundedCornerShape(22.dp))
+                .background(c.accent, RoundedCornerShape(13.dp))
         )
-        Column(Modifier.padding(4.dp)) {
+        Column(Modifier.padding(2.dp)) {
             RAIL_NAMES.forEachIndexed { i, name ->
                 val on = current == i
                 val tint = if (on) c.onAccent else c.ink
                 Column(
                     Modifier
                         .size(cellW, cellH)
-                        .clip(RoundedCornerShape(22.dp))
+                        .clip(RoundedCornerShape(13.dp))
                         .clickable { onSelect(i) }
                         .androidx_semantics(name),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Glyph(RAIL_GLYPHS[i], tint, 21.dp)
+                    Glyph(RAIL_GLYPHS[i], tint, 15.dp)
                     Text(
                         counts.getOrElse(i) { 0 }.toString(),
-                        fontSize = 11.sp,
+                        fontSize = 9.sp,
+                        lineHeight = 10.sp,
                         fontWeight = FontWeight.SemiBold,
                         color = tint.copy(alpha = if (on) 1f else 0.7f),
-                        modifier = Modifier.padding(top = 2.dp)
+                        modifier = Modifier.padding(top = 1.dp)
                     )
                 }
             }

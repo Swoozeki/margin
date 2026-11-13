@@ -371,7 +371,7 @@ fun MarginApp(autoStart: Boolean, onAutoStartHandled: () -> Unit) {
             onSelect = { scope.launch { pagerState.animateScrollToPage(it) } },
             modifier = Modifier
                 .align(Alignment.CenterStart)
-                .padding(start = 8.dp, top = topPad, bottom = 150.dp + navBottom)
+                .padding(start = 3.dp, top = topPad, bottom = 150.dp + navBottom)
         )
 
         HoldScrim(recording = recording, zone = zone, live = live, top = topPad)
